@@ -103,10 +103,7 @@ def _load_data_from_supabase() -> Optional[pd.DataFrame]:
 
         while True:
             resp = (
-                client.table(SUPABASE_TABLE)
-                .select("appid,game,review_count,positive_rate,tags")
-                .offset(offset)
-                .execute()
+                client.table(SUPABASE_TABLE).select("appid,game,review_count,positive_rate,tags,release_date").offset(offset).execute()
             )
             batch = resp.data or []
             if not batch:
@@ -483,22 +480,7 @@ def calculate_tag_combo_synergy(
     Returns:
         DataFrame，包含组合 Lift、个体 Lift 与协同指标。
     """
-    columns = [
-        'tag_a',
-        'tag_b',
-        'tag_pair',
-        'game_count',
-        'high_positive_count',
-        'p_high_positive_given_combo',
-        'p_high_positive_global',
-        'pair_lift',
-        'lift_tag_a',
-        'lift_tag_b',
-        'expected_pair_lift',
-        'synergy_ratio',
-        'synergy_delta',
-        'positive_rate_threshold',
-    ]
+    columns = ['tag1','tag2','tag_pair','game_count','high_positive_count','p_high_positive_given_combo','p_high_positive_global','pair_lift','lift_tag_a','lift_tag_b','expected_pair_lift','synergy_score','synergy_delta','positive_rate_threshold','tag_a','tag_b','synergy_ratio']
     if df.empty or 'tags' not in df.columns:
         return pd.DataFrame(columns=columns)
 
@@ -568,13 +550,13 @@ def calculate_tag_combo_synergy(
     combo_stats['synergy_ratio'] = combo_stats['pair_lift'] / combo_stats['expected_pair_lift'].replace(0, pd.NA)
     combo_stats['synergy_ratio'] = combo_stats['synergy_ratio'].fillna(0.0)
     combo_stats['synergy_delta'] = combo_stats['pair_lift'] - combo_stats['expected_pair_lift']
-    combo_stats['tag_pair'] = combo_stats['tag_a'] + ' + ' + combo_stats['tag_b']
+    combo_stats['tag1'] = combo_stats['tag_a']
+    combo_stats['tag2'] = combo_stats['tag_b']
+    combo_stats['synergy_score'] = combo_stats['synergy_ratio']
+    combo_stats['tag_pair'] = combo_stats['tag1'] + ' + ' + combo_stats['tag2']
     combo_stats['positive_rate_threshold'] = threshold
 
-    return combo_stats[columns].sort_values(
-        ['synergy_ratio', 'pair_lift', 'game_count'],
-        ascending=[False, False, False],
-    ).reset_index(drop=True)
+    return combo_stats[columns].sort_values(['synergy_score', 'pair_lift', 'game_count'], ascending=[False, False, False]).reset_index(drop=True)
 
 
 def calculate_yearly_trends(

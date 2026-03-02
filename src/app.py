@@ -6,6 +6,9 @@ Steam 游戏数据分析 Dashboard
 import streamlit as st
 import sys
 from pathlib import Path
+import datetime
+import sys
+from pathlib import Path
 
 # 添加 src 目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent))
@@ -113,6 +116,31 @@ def get_cached_yearly_trends(min_reviews: int):
     df = load_cached_data(min_reviews)
     return calculate_yearly_trends(df)
 
+def show_quadrant_explanation():
+    for name, color in QUADRANT_COLORS.items():
+        if name == "千里马":
+            desc = "高好评 + 高评论"
+        elif name == "潜力小子":
+            desc = "高好评 + 低评论"
+        elif name == "问题小子":
+            desc = "低好评 + 高评论"
+        else:
+            desc = "低好评 + 低评论"
+        
+        st.markdown(f"""
+        <div style="
+            background-color: {color}; 
+            color: white; 
+            padding: 8px 12px; 
+            border-radius: 6px; 
+            margin-bottom: 6px;
+            font-size: 13px;
+        ">
+            <b>{name}</b><br>
+            <span style="opacity: 0.9;">{desc}</span>
+        </div>
+        """, unsafe_allow_html=True)
+
 def main():
     # 标题
     st.markdown('<div class="main-header">🎮 Steam 游戏数据分析 Dashboard</div>', unsafe_allow_html=True)
@@ -145,32 +173,7 @@ def main():
         st.metric("平均评论数", f"{global_stats['avg_reviews']:,.0f}")
         
         st.divider()
-        
-        # 图例说明
-        st.subheader("📍 四象限说明")
-        for name, color in QUADRANT_COLORS.items():
-            if name == "千里马":
-                desc = "高好评 + 高评论"
-            elif name == "潜力小子":
-                desc = "高好评 + 低评论"
-            elif name == "问题小子":
-                desc = "低好评 + 高评论"
-            else:
-                desc = "低好评 + 低评论"
-            
-            st.markdown(f"""
-            <div style="
-                background-color: {color}; 
-                color: white; 
-                padding: 8px 12px; 
-                border-radius: 6px; 
-                margin-bottom: 6px;
-                font-size: 13px;
-            ">
-                <b>{name}</b><br>
-                <span style="opacity: 0.9;">{desc}</span>
-            </div>
-            """, unsafe_allow_html=True)
+        st.caption(f"数据更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 主内容区 - 使用 Tabs
     tab1, tab2, tab3, tab_lift, tab_synergy, tab_trend, tab4 = st.tabs([
@@ -193,6 +196,8 @@ def main():
     with tab1:
         st.subheader("Tags 综合分析")
         st.markdown("每个圆点代表一个 Tag，位置表示该 Tag 下所有游戏的**平均好评率**和**平均评论数**。")
+        with st.expander("📍 四象限说明"):
+            show_quadrant_explanation()
         
         col1, col2 = st.columns([3, 1])
         
@@ -267,6 +272,8 @@ def main():
     with tab2:
         st.subheader("单 Tag 详细分析")
         st.markdown("选择一个 Tag，查看该 Tag 下所有游戏的分布情况。")
+        with st.expander("📍 四象限说明"):
+            show_quadrant_explanation()
         
         col1, col2 = st.columns([3, 1])
         
@@ -339,6 +346,8 @@ def main():
     with tab3:
         st.subheader("多 Tags 组合分析")
         st.markdown("选择 2-3 个 Tags，查看同时拥有这些 Tags 的游戏分布。")
+        with st.expander("📍 四象限说明"):
+            show_quadrant_explanation()
         
         col1, col2 = st.columns([3, 1])
         
@@ -429,8 +438,13 @@ def main():
         
         lift_df = get_cached_tag_lift(min_reviews)
         if not lift_df.empty:
-            top_n_lift = st.slider("显示 Top N 个 Tag", min_value=10, max_value=50, value=20, step=5, key="lift_slider")
-            fig_lift = create_tag_lift_chart(lift_df, top_n=top_n_lift)
+            selected_lift_tags = st.multiselect("搜索特定 Tag", options=all_tags, default=[], key="lift_tags")
+            if selected_lift_tags:
+                display_lift_df = lift_df[lift_df['tag'].isin(selected_lift_tags)]
+                fig_lift = create_tag_lift_chart(display_lift_df, top_n=len(selected_lift_tags))
+            else:
+                top_n_lift = st.slider("显示 Top N 个 Tag", min_value=10, max_value=50, value=20, step=5, key="lift_slider")
+                fig_lift = create_tag_lift_chart(lift_df, top_n=top_n_lift)
             st.plotly_chart(fig_lift, use_container_width=True)
         else:
             st.info("没有足够的 Lift 数据")
@@ -473,7 +487,13 @@ def main():
         - **评估质量趋势**：折线图代表当年的平均好评率。如果数量上升但好评率下降，可能意味着市场出现了“劣币驱逐良币”或玩家审美疲劳；如果两者双升，则说明市场处于健康的高速发展期。
         """)
         
-        trend_df = get_cached_yearly_trends(min_reviews)
+        trend_tag = st.selectbox("按 Tag 筛选", options=["全部"] + all_tags, index=0, key="trend_tag")
+        if trend_tag == "全部":
+            trend_df = get_cached_yearly_trends(min_reviews)
+        else:
+            tag_df = get_games_by_tag(df, trend_tag)
+            trend_df = calculate_yearly_trends(tag_df)
+            
         if not trend_df.empty:
             fig_trend = create_time_trend_chart(trend_df)
             st.plotly_chart(fig_trend, use_container_width=True)

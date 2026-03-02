@@ -52,15 +52,15 @@ def create_tag_overview_chart(
         ),
         axis=1
     )
-    df['color'] = df['quadrant'].map(QUADRANT_COLORS)
+    df['color'] = [QUADRANT_COLORS.get(quadrant_name, '#666') for quadrant_name in df['quadrant']]
     
     # 创建散点图
     fig = go.Figure()
     
     # 按象限添加散点
     for quadrant, color in QUADRANT_COLORS.items():
-        quad_df = df[df['quadrant'] == quadrant]
-        if not quad_df.empty:
+        quad_df = df[df['quadrant'] == quadrant].copy()
+        if len(quad_df) > 0:
             fig.add_trace(go.Scatter(
                 x=quad_df['avg_reviews'],
                 y=quad_df['avg_positive_rate'],
@@ -168,8 +168,8 @@ def create_single_tag_chart(
     fig = go.Figure()
     
     for quadrant, color in QUADRANT_COLORS.items():
-        quad_df = df[df['quadrant'] == quadrant]
-        if not quad_df.empty:
+        quad_df = df[df['quadrant'] == quadrant].copy()
+        if len(quad_df) > 0:
             fig.add_trace(go.Scatter(
                 x=quad_df['reviews'],
                 y=quad_df['positive_rate'],
@@ -275,8 +275,8 @@ def create_multi_tags_chart(
     fig = go.Figure()
     
     for quadrant, color in QUADRANT_COLORS.items():
-        quad_df = df[df['quadrant'] == quadrant]
-        if not quad_df.empty:
+        quad_df = df[df['quadrant'] == quadrant].copy()
+        if len(quad_df) > 0:
             fig.add_trace(go.Scatter(
                 x=quad_df['reviews'],
                 y=quad_df['positive_rate'],
@@ -383,23 +383,23 @@ def classify_quadrant(
         return "彻底凉凉"
 
 
-def create_quadrant_stats_html(stats: Dict[str, Dict]) -> str:
+def create_quadrant_stats_html(stats: Dict[str, Dict[str, float]]) -> str:
     """
     创建四象限统计的 HTML 显示
-    
+
     Args:
         stats: 四象限统计数据
-    
+
     Returns:
         HTML 字符串
     """
     html_parts = []
-    
+
     for quadrant, data in stats.items():
         color = QUADRANT_COLORS.get(quadrant, "#666")
         count = data.get('count', 0)
         percentage = data.get('percentage', 0)
-        
+
         html_parts.append(f"""
         <div style="
             background-color: {color}; 
@@ -414,7 +414,7 @@ def create_quadrant_stats_html(stats: Dict[str, Dict]) -> str:
             <div style="font-size: 12px; opacity: 0.9;">占 {percentage}%</div>
         </div>
         """)
-    
+
     return "\n".join(html_parts)
 
 
@@ -480,7 +480,14 @@ def create_tag_synergy_chart(
         return create_empty_chart("没有足够的协同效应数据")
         
     if 'tag1' not in synergy_data.columns or 'tag2' not in synergy_data.columns or 'synergy_score' not in synergy_data.columns:
-        return create_empty_chart("数据格式错误：缺少 tag1, tag2 或 synergy_score 列")
+        has_legacy_columns = {'tag_a', 'tag_b', 'synergy_ratio'}.issubset(synergy_data.columns)
+        if not has_legacy_columns:
+            return create_empty_chart("数据格式错误：缺少 tag1, tag2 或 synergy_score 列")
+        synergy_data = synergy_data.rename(columns={
+            'tag_a': 'tag1',
+            'tag_b': 'tag2',
+            'synergy_ratio': 'synergy_score',
+        })
         
     if chart_type == 'heatmap':
         pivot_df = synergy_data.pivot(index='tag1', columns='tag2', values='synergy_score')
@@ -497,7 +504,7 @@ def create_tag_synergy_chart(
         if df.empty:
             df = synergy_data
             
-        df['abs_score'] = df['synergy_score'].abs()
+        df['abs_score'] = [abs(float(score)) if pd.notna(score) else 0.0 for score in df['synergy_score']]
         
         fig = px.scatter(
             df,

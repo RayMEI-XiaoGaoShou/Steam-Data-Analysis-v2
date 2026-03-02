@@ -143,8 +143,8 @@ def show_quadrant_explanation():
 
 def main():
     # 标题
-    st.markdown('<div class="main-header">🎮 Steam 游戏数据分析 Dashboard</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">分析 Tags 与好评率、评论数之间的关联</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🎮 Steam 游戏数据分析</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">分析 Tags 与好评率、评论数之间的关联，面向预研/立项/投资筛选的 Tag 机会发现工具</div>', unsafe_allow_html=True)
     
     # 侧边栏 - 全局设置
     with st.sidebar:
@@ -169,8 +169,8 @@ def main():
         # 显示数据概览
         st.subheader("📊 数据概览")
         st.metric("游戏总数", f"{global_stats['total_games']:,}")
-        st.metric("平均好评率", f"{global_stats['avg_positive_rate']:.1f}%")
-        st.metric("平均评论数", f"{global_stats['avg_reviews']:,.0f}")
+        st.metric("好评率中位数", f"{global_stats['avg_positive_rate']:.1f}%")
+        st.metric("评论数中位数", f"{global_stats['avg_reviews']:,.0f}")
         
         st.divider()
         st.caption(f"数据更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -195,7 +195,7 @@ def main():
     # ==================== Tab 1: 综合分析 ====================
     with tab1:
         st.subheader("Tags 综合分析")
-        st.markdown("每个圆点代表一个 Tag，位置表示该 Tag 下所有游戏的**平均好评率**和**平均评论数**。")
+        st.markdown("每个圆点代表一个 Tag，位置表示该 Tag 下所有游戏的**好评率中位数**和**评论数中位数**。")
         with st.expander("📍 四象限说明"):
             show_quadrant_explanation()
         
@@ -297,8 +297,8 @@ def main():
                     st.markdown("---")
                     st.markdown("**Tag 统计**")
                     st.metric("游戏数量", len(tag_games))
-                    st.metric("平均好评率", f"{tag_avg_rate:.1f}%")
-                    st.metric("平均评论数", f"{tag_avg_reviews:,.0f}")
+                    st.metric("好评率中位数", f"{tag_avg_rate:.1f}%")
+                    st.metric("评论数中位数", f"{tag_avg_reviews:,.0f}")
                     
                     st.markdown("---")
                     st.markdown("**四象限分布**")
@@ -373,8 +373,8 @@ def main():
                     tag_avg_rate = multi_tag_games['positive_rate'].mean()
                     tag_avg_reviews = multi_tag_games['reviews'].mean()
                     
-                    st.metric("平均好评率", f"{tag_avg_rate:.1f}%")
-                    st.metric("平均评论数", f"{tag_avg_reviews:,.0f}")
+                    st.metric("好评率中位数", f"{tag_avg_rate:.1f}%")
+                    st.metric("评论数中位数", f"{tag_avg_reviews:,.0f}")
                     
                     st.markdown("---")
                     st.markdown("**四象限分布**")
@@ -428,9 +428,9 @@ def main():
         st.markdown("""
         **什么是破圈度 (Lift)？**
         Lift 指标衡量了一个 Tag 对游戏获得“高好评”的**提升倍数**。
-        - **Lift > 1**：说明带有该 Tag 的游戏，获得高好评的概率**高于**全局平均水平。数值越大，说明该 Tag 越是“好评密码”。
+        - **Lift > 1**：说明带有该 Tag 的游戏，获得高好评的概率**高于**全局中位数水平。数值越大，说明该 Tag 越是“好评密码”。
         - **Lift = 1**：说明该 Tag 对好评率没有明显影响。
-        - **Lift < 1**：说明带有该 Tag 的游戏，获得高好评的概率**低于**全局平均水平，可能是“雷区”。
+        - **Lift < 1**：说明带有该 Tag 的游戏，获得高好评的概率**低于**全局中位数水平，可能是“雷区”。
 
         **如何使用此洞察？**
         在立项或宣发时，优先考虑那些 Lift 显著大于 1 的核心玩法或题材 Tag，这通常意味着该品类的核心受众更容易给出好评，或者该品类的市场竞争环境相对友好。
@@ -480,11 +480,11 @@ def main():
         st.subheader("⏳ 游戏发布时间趋势")
         st.markdown("""
         **什么是时间趋势？**
-        展示了历年发布游戏的**数量变化**与**平均好评率**的演变。
+        展示了历年发布游戏的**数量变化**与**好评率中位数**的演变。
 
         **如何使用此洞察？**
         - **观察市场热度**：柱状图代表每年符合条件（评论数达标）的游戏数量，反映了 Steam 市场的整体繁荣度或竞争激烈程度。
-        - **评估质量趋势**：折线图代表当年的平均好评率。如果数量上升但好评率下降，可能意味着市场出现了“劣币驱逐良币”或玩家审美疲劳；如果两者双升，则说明市场处于健康的高速发展期。
+        - **评估质量趋势**：折线图代表当年的好评率中位数。如果数量上升但好评率下降，可能意味着市场出现了“劣币驱逐良币”或玩家审美疲劳；如果两者双升，则说明市场处于健康的高速发展期。
         """)
         
         trend_tag = st.selectbox("按 Tag 筛选", options=["全部"] + all_tags, index=0, key="trend_tag")

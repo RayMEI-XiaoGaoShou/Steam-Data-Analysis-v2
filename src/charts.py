@@ -30,7 +30,8 @@ def create_tag_overview_chart(
     Args:
         tag_stats: Tag 统计数据 DataFrame
         selected_tags: 要显示的 Tag 列表
-        global_avg_rate: 全局平均好评率
+        global_avg_rate: 全局好评率中位数
+        global_avg_reviews: 全局评论数中位数
         global_avg_reviews: 全局平均评论数
     
     Returns:
@@ -76,7 +77,8 @@ def create_tag_overview_chart(
                 ),
                 hovertemplate=(
                     '<b>%{text}</b><br>'
-                    '平均好评率: %{y:.1f}%<br>'
+                    '好评率中位数: %{y:.1f}%<br>'
+                    '评论数中位数: %{x:,.0f}<br>'
                     '平均评论数: %{x:,.0f}<br>'
                     '游戏数: %{customdata}<extra></extra>'
                 ),
@@ -88,14 +90,14 @@ def create_tag_overview_chart(
         y=global_avg_rate, 
         line_dash="dash", 
         line_color="gray",
-        annotation_text=f"平均好评率 {global_avg_rate:.1f}%",
+        annotation_text=f"好评率中位数 {global_avg_rate:.1f}%",
         annotation_position="right"
     )
     fig.add_vline(
         x=global_avg_reviews, 
         line_dash="dash", 
         line_color="gray",
-        annotation_text=f"平均评论数 {global_avg_reviews:,.0f}",
+        annotation_text=f"评论数中位数 {global_avg_reviews:,.0f}",
         annotation_position="top"
     )
     
@@ -106,12 +108,12 @@ def create_tag_overview_chart(
             font=dict(size=18)
         ),
         xaxis=dict(
-            title="平均评论数",
+            title="评论数中位数",
             type="log",  # 使用对数刻度
             gridcolor='lightgray',
         ),
         yaxis=dict(
-            title="平均好评率 (%)",
+            title="好评率中位数 (%)",
             range=[60, 100],
             gridcolor='lightgray',
         ),
@@ -142,7 +144,8 @@ def create_single_tag_chart(
     Args:
         games_df: 该 Tag 下的游戏 DataFrame
         tag: Tag 名称
-        avg_rate: 该 Tag 的平均好评率
+        avg_rate: 该 Tag 的好评率中位数
+        avg_reviews: 该 Tag 的评论数中位数
         avg_reviews: 该 Tag 的平均评论数
     
     Returns:
@@ -194,14 +197,14 @@ def create_single_tag_chart(
         y=avg_rate, 
         line_dash="dash", 
         line_color="gray",
-        annotation_text=f"平均好评率 {avg_rate:.1f}%",
+        annotation_text=f"好评率中位数 {avg_rate:.1f}%",
         annotation_position="right"
     )
     fig.add_vline(
         x=avg_reviews, 
         line_dash="dash", 
         line_color="gray",
-        annotation_text=f"平均评论数 {avg_reviews:,.0f}",
+        annotation_text=f"评论数中位数 {avg_reviews:,.0f}",
         annotation_position="top"
     )
     
@@ -247,7 +250,8 @@ def create_multi_tags_chart(
     Args:
         games_df: 同时包含多个 Tags 的游戏 DataFrame
         tags: Tag 名称列表
-        avg_rate: 平均好评率
+        avg_rate: 好评率中位数
+        avg_reviews: 评论数中位数
         avg_reviews: 平均评论数
     
     Returns:
@@ -301,14 +305,14 @@ def create_multi_tags_chart(
         y=avg_rate, 
         line_dash="dash", 
         line_color="gray",
-        annotation_text=f"平均好评率 {avg_rate:.1f}%",
+        annotation_text=f"好评率中位数 {avg_rate:.1f}%",
         annotation_position="right"
     )
     fig.add_vline(
         x=avg_reviews, 
         line_dash="dash", 
         line_color="gray",
-        annotation_text=f"平均评论数 {avg_reviews:,.0f}",
+        annotation_text=f"评论数中位数 {avg_reviews:,.0f}",
         annotation_position="top"
     )
     
@@ -626,7 +630,7 @@ def create_time_trend_chart(
         range=[max(0, df['avg_positive_rate'].min() - 10), min(100, df['avg_positive_rate'].max() + 10)],
         showgrid=False,
         tickfont=dict(family="Impact, sans-serif", size=14, color='#FF3366'),
-        titlefont=dict(color='#FF3366')
+        title_font=dict(color='#FF3366')
     )
     
     return fig

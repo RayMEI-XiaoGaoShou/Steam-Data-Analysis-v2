@@ -327,8 +327,8 @@ def _calculate_tag_probability_table(
 
     exploded_df['is_high_positive'] = high_positive_mask.reindex(exploded_df.index).astype(float).values
     tag_stats = exploded_df.groupby('tag', as_index=False).agg(
-        avg_positive_rate=('positive_rate', 'mean'),
-        avg_reviews=('reviews', 'mean'),
+        avg_positive_rate=('positive_rate', 'median'),
+        avg_reviews=('reviews', 'median'),
         game_count=('tag', 'size'),
         high_positive_count=('is_high_positive', 'sum'),
     )
@@ -592,7 +592,7 @@ def calculate_yearly_trends(
     yearly_trend = (
         valid_df.groupby('release_year', as_index=False)
         .agg(
-            avg_positive_rate=('positive_rate', 'mean'),
+            avg_positive_rate=('positive_rate', 'median'),
             game_count=('positive_rate', 'size'),
         )
         .rename(columns={'release_year': 'year'})

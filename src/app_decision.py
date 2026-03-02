@@ -9,7 +9,7 @@ from pathlib import Path
 import datetime
 import sys
 from pathlib import Path
-
+import pandas as pd
 # 添加 src 目录到 Python 路径
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -25,8 +25,10 @@ from data_processor import (
     calculate_tag_lift,
     calculate_tag_combo_synergy,
     calculate_yearly_trends,
-    QUADRANT_COLORS
+    QUADRANT_COLORS,
+    calculate_combo_verdict
 )
+import plotly.express as px
 from charts import (
     create_tag_overview_chart,
     create_single_tag_chart,
@@ -141,40 +143,78 @@ def show_quadrant_explanation():
         </div>
         """, unsafe_allow_html=True)
 
-def main():
-    # 标题
-    st.markdown('<div class="main-header">🎮 Steam 游戏数据分析</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">分析 Tags 与好评率、评论数之间的关联，面向预研/立项/投资筛选的 Tag 机会发现工具</div>', unsafe_allow_html=True)
+def render_opportunity_discovery(df, min_reviews, tag_stats):
+    st.header("💡 机会发现")
+    synergy_df = get_cached_tag_synergy(min_reviews, 50)
     
-    # 侧边栏 - 全局设置
-    with st.sidebar:
-        st.header("⚙️ 设置")
-        
-        # 评论数阈值滑块
-        min_reviews = st.slider(
-            "最小评论数阈值",
-            min_value=200,
-            max_value=1000,
-            value=200,
-            step=50,
-            help="只分析评论数大于此阈值的游戏"
-        )
-        
-        st.divider()
-        
-        # 加载数据
-        df = load_cached_data(min_reviews)
-        global_stats = calculate_global_stats(df)
-        
-        # 显示数据概览
-        st.subheader("📊 数据概览")
-        st.metric("游戏总数", f"{global_stats['total_games']:,}")
-        st.metric("好评率中位数", f"{global_stats['avg_positive_rate']:.1f}%")
-        st.metric("评论数中位数", f"{global_stats['avg_reviews']:,.0f}")
-        
-        st.divider()
-        st.caption(f"数据更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.subheader("高口碑蓝海 (高好评低供给)")
+        blue_ocean = tag_stats[(tag_stats['game_count'] > 5) & (tag_stats['game_count'] < tag_stats['game_count'].median())].sort_values('avg_positive_rate', ascending=False).head(3)
+        for _, row in blue_ocean.iterrows():
+            st.metric(row['tag'], f"{row['avg_positive_rate']:.1f}% 好评", f"{row['game_count']} 款游戏")
+            
+    with col2:
+        st.subheader("高热度红海 (高好评高热度)")
+        red_ocean = tag_stats[tag_stats['game_count'] >= tag_stats['game_count'].median()].sort_values(['avg_reviews', 'avg_positive_rate'], ascending=[False, False]).head(3)
+        for _, row in red_ocean.iterrows():
+            st.metric(row['tag'], f"{row['avg_reviews']:,.0f} 评论", f"{row['avg_positive_rate']:.1f}% 好评")
+            
+    with col3:
+        st.subheader("高增益组合 (1+1>2)")
+        if not synergy_df.empty:
+            top_synergy = synergy_df.sort_values('synergy_score', ascending=False).head(3)
+            for _, row in top_synergy.iterrows():
+                st.metric(str(row['tag_pair']), f"Synergy: {row['synergy_score']:.2f}", f"Lift: {row['pair_lift']:.2f}")
+                
+    st.divider()
+    st.subheader("🗺️ 机会地图 (Supply vs Quality)")
+    fig = px.scatter(tag_stats, x='game_count', y='avg_positive_rate', size='avg_reviews', hover_name='tag', 
+                     labels={'game_count': '供给量 (游戏数)', 'avg_positive_rate': '质量 (好评率中位数)', 'avg_reviews': '热度 (评论数中位数)'},
+                     title="Tag 机会分布")
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_direction_validation(df, all_tags):
+    st.header("🎯 多Tag方向验证")
+    selected_tags = st.multiselect("选择 2-3 个核心 Tags 进行验证", options=all_tags, max_selections=3)
     
+    if len(selected_tags) >= 2:
+        verdict_res = calculate_combo_verdict(df, selected_tags)
+        
+        st.subheader(f"验证结论: {verdict_res['verdict']}")
+        
+        scores = verdict_res['scores']
+        if not isinstance(scores, dict):
+            scores = {}
+        cols = st.columns(5)
+        metrics = [('Quality', 'Q'), ('Heat', 'H'), ('Synergy', 'S'), ('Momentum', 'M'), ('Confidence', 'C')]
+        for col, (name, key) in zip(cols, metrics):
+            col.metric(name, str(scores[key]))
+            
+        st.divider()
+        st.subheader("相关游戏表现")
+        combo_df = get_games_by_tags(df, selected_tags)
+        if not combo_df.empty:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("**🏆 Top 5 成功案例 (按评论数)**")
+                success = combo_df.sort_values('reviews', ascending=False).head(5)
+                st.dataframe(success[['name', 'positive_rate', 'reviews']], hide_index=True)
+            with col2:
+                st.markdown("**💔 Top 5 失败案例 (按好评率最低)**")
+                fail = combo_df.sort_values('positive_rate', ascending=True).head(5)
+                st.dataframe(fail[['name', 'positive_rate', 'reviews']], hide_index=True)
+            with col3:
+                st.markdown("**🆕 最近发布**")
+                if 'release_datetime' in combo_df.columns:
+                    recent = combo_df.sort_values('release_datetime', ascending=False).head(5)
+                    st.dataframe(recent[['name', 'positive_rate', 'reviews']], hide_index=True)
+                else:
+                    st.info("无发布时间数据")
+    else:
+        st.info("请选择至少 2 个 Tags")
+
+def render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag_stats):
     # 主内容区 - 使用 Tabs
     tab1, tab2, tab3, tab_lift, tab_synergy, tab_trend, tab4 = st.tabs([
         "📈 综合分析", 
@@ -185,12 +225,6 @@ def main():
         "⏳ 时间趋势",
         "📋 数据表格"
     ])
-    
-    # 获取数据
-    df = load_cached_data(min_reviews)
-    global_stats = calculate_global_stats(df)
-    tag_stats = get_cached_tag_stats(min_reviews)
-    all_tags = get_all_tags(df)
     
     # ==================== Tab 1: 综合分析 ====================
     with tab1:
@@ -305,8 +339,8 @@ def main():
                     
                     quad_stats = calculate_quadrant_stats(
                         tag_games, 
-                        tag_avg_rate, 
-                        tag_avg_reviews
+                        float(tag_avg_rate), 
+                        float(tag_avg_reviews)
                     )
                     
                     for quadrant, data in quad_stats.items():
@@ -335,8 +369,8 @@ def main():
                     fig = create_single_tag_chart(
                         tag_games,
                         selected_tag,
-                        tag_avg_rate,
-                        tag_avg_reviews
+                        float(tag_avg_rate),
+                        float(tag_avg_reviews)
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
@@ -381,8 +415,8 @@ def main():
                     
                     quad_stats = calculate_quadrant_stats(
                         multi_tag_games, 
-                        tag_avg_rate, 
-                        tag_avg_reviews
+                        float(tag_avg_rate), 
+                        float(tag_avg_reviews)
                     )
                     
                     for quadrant, data in quad_stats.items():
@@ -415,8 +449,8 @@ def main():
                     fig = create_multi_tags_chart(
                         multi_tag_games,
                         selected_multi_tags,
-                        tag_avg_rate,
-                        tag_avg_reviews
+                        float(tag_avg_rate),
+                        float(tag_avg_reviews)
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 else:
@@ -441,7 +475,7 @@ def main():
             selected_lift_tags = st.multiselect("搜索特定 Tag", options=all_tags, default=[], key="lift_tags")
             if selected_lift_tags:
                 display_lift_df = lift_df[lift_df['tag'].isin(selected_lift_tags)]
-                fig_lift = create_tag_lift_chart(display_lift_df, top_n=len(selected_lift_tags))
+                fig_lift = create_tag_lift_chart(pd.DataFrame(display_lift_df), top_n=len(selected_lift_tags))
             else:
                 top_n_lift = st.slider("显示 Top N 个 Tag", min_value=10, max_value=50, value=20, step=5, key="lift_slider")
                 fig_lift = create_tag_lift_chart(lift_df, top_n=top_n_lift)
@@ -533,17 +567,17 @@ def main():
         
         # 排序
         if sort_by == "评论数（高→低）":
-            display_df = display_df.sort_values('reviews', ascending=False)
+            display_df = display_df.sort_values(by='reviews', ascending=False) # type: ignore
         elif sort_by == "评论数（低→高）":
-            display_df = display_df.sort_values('reviews', ascending=True)
+            display_df = display_df.sort_values(by='reviews', ascending=True) # type: ignore
         elif sort_by == "好评率（高→低）":
-            display_df = display_df.sort_values('positive_rate', ascending=False)
+            display_df = display_df.sort_values(by='positive_rate', ascending=False) # type: ignore
         else:
-            display_df = display_df.sort_values('positive_rate', ascending=True)
+            display_df = display_df.sort_values(by='positive_rate', ascending=True) # type: ignore
         
         # 显示表格
         st.dataframe(
-            display_df[['name', 'positive_rate', 'reviews', 'tag_1', 'tag_2', 'tag_3', 'tag_4', 'tag_5']].rename(columns={
+            display_df[['name', 'positive_rate', 'reviews', 'tag_1', 'tag_2', 'tag_3', 'tag_4', 'tag_5']].rename(columns={ # type: ignore
                 'name': '游戏名称',
                 'positive_rate': '好评率 (%)',
                 'reviews': '评论数',
@@ -559,6 +593,57 @@ def main():
         
         st.caption(f"共 {len(display_df)} 款游戏")
 
+def main():
+    # 标题
+    st.markdown('<div class="main-header">🎮 Steam 游戏数据分析</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">分析 Tags 与好评率、评论数之间的关联，面向预研/立项/投资筛选的 Tag 机会发现工具</div>', unsafe_allow_html=True)
+    
+    # 侧边栏 - 全局设置
+    with st.sidebar:
+        st.header("🧭 导航")
+        nav = st.radio("导航", ["机会发现", "多Tag方向验证", "Tag画像(待开发)", "对标库(待开发)", "底层数据分析"], label_visibility="collapsed")
+        
+        st.divider()
+        st.header("⚙️ 设置")
+        
+        # 评论数阈值滑块
+        min_reviews = st.slider(
+            "最小评论数阈值",
+            min_value=200,
+            max_value=1000,
+            value=200,
+            step=50,
+            help="只分析评论数大于此阈值的游戏"
+        )
+        
+        st.divider()
+        
+        # 加载数据
+        df = load_cached_data(min_reviews)
+        global_stats = calculate_global_stats(df)
+        
+        # 显示数据概览
+        st.subheader("📊 数据概览")
+        st.metric("游戏总数", f"{global_stats['total_games']:,}")
+        st.metric("好评率中位数", f"{global_stats['avg_positive_rate']:.1f}%")
+        st.metric("评论数中位数", f"{global_stats['avg_reviews']:,.0f}")
+        
+        st.divider()
+        st.caption(f"数据更新时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    all_tags = get_all_tags(df)
+    tag_stats = get_cached_tag_stats(min_reviews)
+    
+    if nav == "机会发现":
+        render_opportunity_discovery(df, min_reviews, tag_stats)
+    elif nav == "多Tag方向验证":
+        render_direction_validation(df, all_tags)
+    elif nav == "Tag画像(待开发)":
+        st.info("开发中...")
+    elif nav == "对标库(待开发)":
+        st.info("开发中...")
+    elif nav == "底层数据分析":
+        render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag_stats)
 
 if __name__ == "__main__":
     main()

@@ -8,6 +8,7 @@
 import pandas as pd
 import streamlit as st
 import importlib
+import math
 from itertools import combinations
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Set
@@ -650,6 +651,315 @@ def get_games_by_tags(df: pd.DataFrame, tags: List[str]) -> pd.DataFrame:
     
     mask = df['tags'].apply(lambda x: all(tag in x for tag in tags))
     return df[mask].copy()
+
+
+def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str, object]:
+    """
+    计算 Tag 组合的 Verdict V1 评分。
+
+    评分维度：
+        - Q (Quality): 组合中位数好评率在同阶组合中的百分位；
+        - H (Heat): 组合中位数评论数（log1p）在同阶组合中的百分位；
+        - S (Synergy): 相对全局 Lift 与相对最大子组合 Lift 的综合分；
+        - M (Momentum): 最近 3 年供给与质量趋势分；
+        - C (Confidence): 样本量置信度分。
+
+    Args:
+        df: 游戏数据，需包含 `positive_rate`、`reviews`、`tags` 或 `tags_str`。
+        combo_tags: 目标组合的 Tag 列表。
+
+    Returns:
+        Dict，包含分项分数、子结论和最终 Verdict。
+    """
+    normalized_tags: List[str] = []
+    for tag in combo_tags or []:
+        cleaned_tag = str(tag).strip()
+        if cleaned_tag and cleaned_tag not in normalized_tags:
+            normalized_tags.append(cleaned_tag)
+
+    def _score_to_level(score: float) -> str:
+        if score >= 70:
+            return "High"
+        if score >= 40:
+            return "Med"
+        return "Low"
+
+    def _lift_to_score(lift_value: float) -> float:
+        if pd.isna(lift_value):
+            return 0.0
+        return float(max(0.0, min(100.0, float(lift_value) * 50.0)))
+
+    def _confidence_score(sample_size: int) -> float:
+        if sample_size >= 200:
+            return 100.0
+        if sample_size >= 80:
+            return 70.0
+        if sample_size >= 30:
+            return 40.0
+        return 10.0
+
+    def _verdict_from_score(total_score: float, sample_size: int) -> str:
+        if sample_size < 5:
+            return "样本不足，暂不建议投入"
+        if total_score >= 75:
+            return "值得继续深挖"
+        if total_score >= 60:
+            return "值得重点观察"
+        if total_score >= 45:
+            return "可以小步试水"
+        return "暂不建议投入"
+
+    def _build_empty_result(reason: str) -> Dict[str, object]:
+        score_dict = {
+            'Q': 0.0,
+            'H': 0.0,
+            'S': 0.0,
+            'M': 0.0,
+            'C': 10.0,
+        }
+        score_dict['total'] = 0.0
+        return {
+            'combo_tags': normalized_tags,
+            'combo_key': ' + '.join(normalized_tags),
+            'sample_size': 0,
+            'scores': score_dict,
+            'sub_verdicts': {k: _score_to_level(v) for k, v in score_dict.items() if k != 'total'},
+            'verdict': "样本不足，暂不建议投入",
+            'final_verdict': "样本不足，暂不建议投入",
+            'details': {
+                'reason': reason,
+                'quality_percentile': 0.0,
+                'heat_percentile': 0.0,
+                'lift_vs_global': 0.0,
+                'lift_vs_max_sub_combo': 0.0,
+                'momentum_years': [],
+                'supply_score': 0.0,
+                'quality_score': 0.0,
+            },
+        }
+
+    if not normalized_tags:
+        return _build_empty_result("empty_combo_tags")
+
+    if df is None or df.empty:
+        return _build_empty_result("empty_data")
+
+    required_columns = {'positive_rate', 'reviews'}
+    if not required_columns.issubset(df.columns):
+        return _build_empty_result("missing_required_columns")
+
+    working_df = df.copy()
+    working_df['positive_rate'] = pd.to_numeric(working_df['positive_rate'], errors='coerce')
+    working_df['reviews'] = pd.to_numeric(working_df['reviews'], errors='coerce')
+    working_df = working_df.dropna(subset=['positive_rate', 'reviews'])
+    if working_df.empty:
+        return _build_empty_result("no_valid_metric_rows")
+
+    if 'tags' not in working_df.columns:
+        if 'tags_str' in working_df.columns:
+            working_df['tags'] = working_df['tags_str'].apply(parse_tags)
+        else:
+            return _build_empty_result("missing_tags_columns")
+    else:
+        working_df['tags'] = working_df['tags'].apply(
+            lambda value: value
+            if isinstance(value, list)
+            else parse_tags(value)
+        )
+
+    combo_size = len(normalized_tags)
+    target_combo_key = tuple(sorted(normalized_tags))
+    combo_df = get_games_by_tags(working_df, normalized_tags)
+    sample_size = int(len(combo_df))
+
+    combo_median_positive_rate = float(combo_df['positive_rate'].median()) if sample_size > 0 else 0.0
+    combo_median_reviews = float(combo_df['reviews'].median()) if sample_size > 0 else 0.0
+
+    combo_rows: List[Dict[str, object]] = []
+    for _, row in working_df[['tags', 'positive_rate', 'reviews']].iterrows():
+        row_tags = row['tags']
+        if not isinstance(row_tags, list):
+            continue
+        unique_tags = sorted({str(tag).strip() for tag in row_tags if str(tag).strip()})
+        if len(unique_tags) < combo_size:
+            continue
+
+        for combo in combinations(unique_tags, combo_size):
+            combo_rows.append({
+                'combo_key': combo,
+                'positive_rate': float(row['positive_rate']),
+                'reviews': float(row['reviews']),
+            })
+
+    if combo_rows:
+        all_combo_df = pd.DataFrame(combo_rows)
+        all_combo_stats = all_combo_df.groupby('combo_key', as_index=False).agg(
+            median_positive_rate=('positive_rate', 'median'),
+            median_reviews=('reviews', 'median'),
+            combo_game_count=('combo_key', 'size'),
+        )
+    else:
+        all_combo_stats = pd.DataFrame(columns=['combo_key', 'median_positive_rate', 'median_reviews', 'combo_game_count'])
+
+    if sample_size > 0 and not all_combo_stats.empty:
+        quality_series = all_combo_stats['median_positive_rate'].dropna()
+        if quality_series.empty:
+            quality_score = 0.0
+        else:
+            quality_score = float((quality_series <= combo_median_positive_rate).mean() * 100)
+
+        log_reviews_series = all_combo_stats['median_reviews'].dropna().clip(lower=0).apply(math.log1p)
+        combo_log_reviews = math.log1p(max(0.0, combo_median_reviews))
+        if log_reviews_series.empty:
+            heat_score = 0.0
+        else:
+            heat_score = float((log_reviews_series <= combo_log_reviews).mean() * 100)
+    else:
+        quality_score = 0.0
+        heat_score = 0.0
+
+    high_positive_threshold = float(working_df['positive_rate'].median())
+    p_high_positive_global = float((working_df['positive_rate'] >= high_positive_threshold).mean())
+    if sample_size > 0 and p_high_positive_global > 0:
+        p_high_positive_combo = float((combo_df['positive_rate'] >= high_positive_threshold).mean())
+        lift_vs_global = p_high_positive_combo / p_high_positive_global
+    else:
+        lift_vs_global = 0.0
+
+    max_sub_combo_lift = 0.0
+    if combo_size > 1 and p_high_positive_global > 0:
+        for sub_combo_size in range(1, combo_size):
+            for sub_combo in combinations(normalized_tags, sub_combo_size):
+                sub_combo_df = get_games_by_tags(working_df, list(sub_combo))
+                if sub_combo_df.empty:
+                    continue
+
+                p_high_positive_sub_combo = float((sub_combo_df['positive_rate'] >= high_positive_threshold).mean())
+                sub_combo_lift = p_high_positive_sub_combo / p_high_positive_global
+                max_sub_combo_lift = max(max_sub_combo_lift, sub_combo_lift)
+
+    if max_sub_combo_lift > 0:
+        lift_vs_max_sub_combo = lift_vs_global / max_sub_combo_lift
+    elif lift_vs_global > 0:
+        lift_vs_max_sub_combo = 1.0
+    else:
+        lift_vs_max_sub_combo = 0.0
+
+    synergy_score = (
+        0.6 * _lift_to_score(lift_vs_global)
+        + 0.4 * _lift_to_score(lift_vs_max_sub_combo)
+    )
+
+    if 'release_year' not in working_df.columns or 'release_datetime' not in working_df.columns:
+        working_df = _add_release_time_features(working_df)
+    if 'release_year' not in combo_df.columns:
+        combo_df = _add_release_time_features(combo_df)
+
+    valid_global_years = working_df['release_year'].dropna()
+    if sample_size > 0 and not valid_global_years.empty:
+        latest_year = int(valid_global_years.max())
+        momentum_years = [latest_year - 2, latest_year - 1, latest_year]
+
+        combo_yearly = (
+            combo_df.dropna(subset=['release_year'])
+            .groupby('release_year', as_index=False)
+            .agg(
+                game_count=('positive_rate', 'size'),
+                avg_positive_rate=('positive_rate', 'median'),
+            )
+        )
+        combo_yearly['release_year'] = combo_yearly['release_year'].astype(int)
+        combo_yearly = combo_yearly.set_index('release_year').reindex(momentum_years)
+
+        supply_series = combo_yearly['game_count'].fillna(0.0).astype(float)
+        global_median_quality = float(working_df['positive_rate'].median())
+        quality_series = combo_yearly['avg_positive_rate'].fillna(global_median_quality).astype(float)
+
+        supply_start = float(supply_series.iloc[0])
+        supply_end = float(supply_series.iloc[-1])
+        if supply_start <= 0 and supply_end > 0:
+            supply_growth = 1.0
+        elif supply_start <= 0 and supply_end <= 0:
+            supply_growth = 0.0
+        else:
+            supply_growth = (supply_end - supply_start) / max(1.0, supply_start)
+        supply_growth = float(max(-1.0, min(1.0, supply_growth)))
+
+        quality_delta = float(quality_series.iloc[-1] - quality_series.iloc[0])
+        quality_delta = float(max(-15.0, min(15.0, quality_delta)))
+
+        supply_score = 50.0 + 50.0 * supply_growth
+        quality_trend_score = 50.0 + (quality_delta / 15.0) * 50.0
+        momentum_score = 0.5 * supply_score + 0.5 * quality_trend_score
+    else:
+        momentum_years = []
+        supply_score = 50.0
+        quality_trend_score = 50.0
+        momentum_score = 50.0
+
+    confidence_score = _confidence_score(sample_size)
+
+    scores = {
+        'Q': round(float(quality_score), 2),
+        'H': round(float(heat_score), 2),
+        'S': round(float(synergy_score), 2),
+        'M': round(float(momentum_score), 2),
+        'C': round(float(confidence_score), 2),
+    }
+    total_score = (
+        0.25 * scores['Q']
+        + 0.20 * scores['H']
+        + 0.25 * scores['S']
+        + 0.15 * scores['M']
+        + 0.15 * scores['C']
+    )
+    scores['total'] = round(float(total_score), 2)
+
+    sub_verdicts = {
+        'Q': _score_to_level(scores['Q']),
+        'H': _score_to_level(scores['H']),
+        'S': _score_to_level(scores['S']),
+        'M': _score_to_level(scores['M']),
+        'C': _score_to_level(scores['C']),
+    }
+
+    if sample_size > 0 and target_combo_key in set(all_combo_stats['combo_key']):
+        combo_rank = int(
+            all_combo_stats['median_positive_rate']
+            .rank(method='min', ascending=False)
+            .loc[all_combo_stats['combo_key'] == target_combo_key]
+            .iloc[0]
+        )
+        total_combos = int(len(all_combo_stats))
+    else:
+        combo_rank = 0
+        total_combos = int(len(all_combo_stats))
+
+    final_verdict = _verdict_from_score(scores['total'], sample_size)
+
+    return {
+        'combo_tags': normalized_tags,
+        'combo_key': ' + '.join(normalized_tags),
+        'sample_size': sample_size,
+        'scores': scores,
+        'sub_verdicts': sub_verdicts,
+        'verdict': final_verdict,
+        'final_verdict': final_verdict,
+        'details': {
+            'quality_percentile': scores['Q'],
+            'heat_percentile': scores['H'],
+            'combo_median_positive_rate': round(combo_median_positive_rate, 4),
+            'combo_median_reviews': round(combo_median_reviews, 2),
+            'lift_vs_global': round(float(lift_vs_global), 4),
+            'lift_vs_max_sub_combo': round(float(lift_vs_max_sub_combo), 4),
+            'high_positive_threshold': round(high_positive_threshold, 4),
+            'momentum_years': momentum_years,
+            'supply_score': round(float(supply_score), 2),
+            'quality_score': round(float(quality_trend_score), 2),
+            'combo_rank': combo_rank,
+            'total_combos': total_combos,
+        },
+    }
 
 
 def calculate_quadrant_stats(

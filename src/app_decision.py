@@ -214,6 +214,166 @@ def render_direction_validation(df, all_tags):
     else:
         st.info("请选择至少 2 个 Tags")
 
+def render_tag_profile(df, min_reviews, all_tags, tag_stats):
+    st.header("🏷️ Tag 画像")
+    selected_tag = st.selectbox("选择 1 个 Tag 进行深度画像", options=all_tags)
+    
+    if selected_tag:
+        tag_games = get_games_by_tag(df, selected_tag)
+        if tag_games.empty:
+            st.warning("没有找到该 Tag 的游戏")
+            return
+            
+        st.subheader("赛道体验卡")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        # Get stats from tag_stats
+        tag_info = tag_stats[tag_stats['tag'] == selected_tag]
+        if not tag_info.empty:
+            tag_info = tag_info.iloc[0]
+            game_count = tag_info['game_count']
+            median_rate = tag_info['avg_positive_rate']
+            median_reviews = tag_info['avg_reviews']
+            lift = tag_info['lift']
+        else:
+            game_count = len(tag_games)
+            median_rate = tag_games['positive_rate'].median()
+            median_reviews = tag_games['reviews'].median()
+            lift = 0.0 # Fallback
+            
+        # Calculate high-rate %
+        global_median_rate = df['positive_rate'].median()
+        high_rate_pct = (tag_games['positive_rate'] >= global_median_rate).mean() * 100
+        
+        col1.metric("游戏数量", f"{game_count}")
+        col2.metric("好评率中位数", f"{median_rate:.1f}%")
+        col3.metric("评论数中位数", f"{median_reviews:,.0f}")
+        col4.metric("高好评率占比", f"{high_rate_pct:.1f}%")
+        col5.metric("破圈度 (Lift)", f"{lift:.2f}")
+        
+        st.divider()
+        st.subheader("代表作与反例")
+        c1, c2, c3, c4 = st.columns(4)
+        
+        with c1:
+            st.markdown("**🔥 热度最高 (Top 5 评论)**")
+            top_reviews = tag_games.sort_values('reviews', ascending=False).head(5)
+            st.dataframe(top_reviews[['name', 'positive_rate', 'reviews']], hide_index=True)
+            
+        with c2:
+            st.markdown("**🏆 口碑最好 (Top 5 好评)**")
+            top_rate = tag_games.sort_values(['positive_rate', 'reviews'], ascending=[False, False]).head(5)
+            st.dataframe(top_rate[['name', 'positive_rate', 'reviews']], hide_index=True)
+            
+        with c3:
+            st.markdown("**💔 口碑最差 (Bottom 5 好评)**")
+            bottom_rate = tag_games.sort_values(['positive_rate', 'reviews'], ascending=[True, False]).head(5)
+            st.dataframe(bottom_rate[['name', 'positive_rate', 'reviews']], hide_index=True)
+            
+        with c4:
+            st.markdown("**🆕 最近发布**")
+            if 'release_datetime' in tag_games.columns:
+                recent = tag_games.sort_values('release_datetime', ascending=False).head(5)
+                st.dataframe(recent[['name', 'positive_rate', 'reviews']], hide_index=True)
+            else:
+                st.info("无发布时间数据")
+                
+        st.divider()
+        st.subheader("⏳ 时间趋势")
+        trend_df = calculate_yearly_trends(tag_games)
+        if not trend_df.empty:
+            fig_trend = create_time_trend_chart(trend_df)
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("没有足够的时间趋势数据")
+
+def render_benchmark_library(df, all_tags):
+    st.header("📚 案例库 / 对标")
+    
+    search_query = st.text_input("输入游戏名称搜索 (支持模糊匹配)", "")
+    
+    if search_query:
+        # Case-insensitive search
+        matches = df[df['name'].str.contains(search_query, case=False, na=False)]
+        
+        if matches.empty:
+            st.warning(f"未找到包含 '{search_query}' 的游戏")
+        else:
+            st.success(f"找到 {len(matches)} 款匹配游戏")
+            
+            # If multiple matches, let user select one
+            if len(matches) > 1:
+                selected_game_name = st.selectbox("选择具体游戏", options=matches['name'].tolist())
+                target_game = matches[matches['name'] == selected_game_name].iloc[0]
+            else:
+                target_game = matches.iloc[0]
+                
+            st.subheader(f"🎮 {target_game['name']}")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            release_date = target_game.get('release_date', '未知')
+            col1.metric("发布时间", str(release_date))
+            col2.metric("好评率", f"{target_game['positive_rate']:.1f}%")
+            col3.metric("评论数", f"{target_game['reviews']:,.0f}")
+            
+            tags = target_game.get('tags', [])
+            if isinstance(tags, list):
+                tags_str = ", ".join(tags[:5])
+            else:
+                tags_str = str(target_game.get('tags_str', ''))
+            col4.metric("核心 Tags", tags_str)
+            
+            st.divider()
+            st.subheader("🔍 相似游戏对标 (共享至少 2 个 Tag)")
+            
+            if isinstance(tags, list) and len(tags) >= 2:
+                # Find games sharing at least 2 tags
+                def count_shared_tags(game_tags):
+                    if not isinstance(game_tags, list):
+                        return 0
+                    return len(set(tags).intersection(set(game_tags)))
+                
+                df_similar = df.copy()
+                df_similar['shared_tags_count'] = df_similar['tags'].apply(count_shared_tags)
+                similar_games = df_similar[(df_similar['shared_tags_count'] >= 2) & (df_similar['name'] != target_game['name'])]
+                
+                if similar_games.empty:
+                    st.info("未找到相似游戏")
+                else:
+                    st.markdown(f"找到 **{len(similar_games)}** 款相似游戏")
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("**📈 表现更好 (好评率更高)**")
+                        better = similar_games[similar_games['positive_rate'] > target_game['positive_rate']]
+                        better = better.sort_values(['positive_rate', 'reviews'], ascending=[False, False]).head(10)
+                        if not better.empty:
+                            st.dataframe(better[['name', 'positive_rate', 'reviews', 'shared_tags_count']], hide_index=True)
+                        else:
+                            st.info("没有表现更好的相似游戏")
+                            
+                    with c2:
+                        st.markdown("**📉 表现较差 (好评率更低)**")
+                        worse = similar_games[similar_games['positive_rate'] < target_game['positive_rate']]
+                        worse = worse.sort_values(['positive_rate', 'reviews'], ascending=[True, False]).head(10)
+                        if not worse.empty:
+                            st.dataframe(worse[['name', 'positive_rate', 'reviews', 'shared_tags_count']], hide_index=True)
+                        else:
+                            st.info("没有表现更差的相似游戏")
+            else:
+                st.info("该游戏 Tag 数量不足，无法进行相似对标")
+                
+    st.divider()
+    st.subheader("🏷️ 按 Tag 筛选案例")
+    filter_tag = st.selectbox("选择 Tag 查看该品类下的所有游戏", options=[""] + all_tags)
+    if filter_tag:
+        tag_games = get_games_by_tag(df, filter_tag)
+        st.dataframe(
+            tag_games[['name', 'positive_rate', 'reviews', 'release_date', 'tags_str']].sort_values('reviews', ascending=False),
+            hide_index=True,
+            use_container_width=True
+        )
+
 def render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag_stats):
     # 主内容区 - 使用 Tabs
     tab1, tab2, tab3, tab_lift, tab_synergy, tab_trend, tab4 = st.tabs([
@@ -639,9 +799,9 @@ def main():
     elif nav == "多Tag方向验证":
         render_direction_validation(df, all_tags)
     elif nav == "Tag画像(待开发)":
-        st.info("开发中...")
+        render_tag_profile(df, min_reviews, all_tags, tag_stats)
     elif nav == "对标库(待开发)":
-        st.info("开发中...")
+        render_benchmark_library(df, all_tags)
     elif nav == "底层数据分析":
         render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag_stats)
 

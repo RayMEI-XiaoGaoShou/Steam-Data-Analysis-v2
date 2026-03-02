@@ -96,8 +96,7 @@ def _load_data_from_supabase() -> Optional[pd.DataFrame]:
         while True:
             resp = (
                 client.table(SUPABASE_TABLE)
-                .select("appid,game,review_count,positive_rate,tag1,tag2,tag3,tag4,tag5")
-                .limit(page_size)
+                .select("appid,game,review_count,positive_rate,tags")
                 .offset(offset)
                 .execute()
             )
@@ -121,9 +120,7 @@ def _load_data_from_supabase() -> Optional[pd.DataFrame]:
 
         for i in range(1, 6):
             col = f'tag{i}'
-            if col not in df.columns:
-                df[col] = ''
-            df[col] = df[col].fillna('').astype(str)
+            df[col] = df['tags'].apply(lambda x: x[i-1] if isinstance(x, list) and len(x) >= i else '')
 
         df['tags_str'] = df.apply(
             lambda r: ', '.join([r['tag1'], r['tag2'], r['tag3'], r['tag4'], r['tag5']]).strip(', ').strip(),

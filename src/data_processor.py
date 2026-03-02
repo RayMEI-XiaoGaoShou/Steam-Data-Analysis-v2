@@ -36,6 +36,7 @@ def load_data(min_reviews: int = 200) -> pd.DataFrame:
     df_supabase = _load_data_from_supabase()
     if df_supabase is None:
         # CSV fallback for local/dev scenarios
+        st.warning("⚠️ 无法连接到 Supabase (或未获取到数据)，正在使用本地 CSV 数据作为 fallback。如果有报错请查看右边通知。")
         df = pd.read_csv(DATA_FILE, encoding='latin-1')
         df = df.drop(columns=['Unnamed: 4', 'Unnamed: 5'], errors='ignore')
         df = df.rename(columns={
@@ -75,13 +76,15 @@ def _load_data_from_supabase() -> Optional[pd.DataFrame]:
     try:
         supabase_module = importlib.import_module("supabase")
         create_client = getattr(supabase_module, "create_client")
-    except Exception:
+    except Exception as e:
+        st.error(f"Supabase 初始化异常 (import): {str(e)}")
         return None
 
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
-    except Exception:
+    except Exception as e:
+        st.error(f"Supabase 读取 Secrets 异常: {str(e)}")
         return None
 
     try:
@@ -107,6 +110,7 @@ def _load_data_from_supabase() -> Optional[pd.DataFrame]:
             offset += page_size
 
         if not rows:
+            st.warning(f"Supabase 查询成功，但表 {SUPABASE_TABLE} 中没有数据返回。")
             return None
 
         df = pd.DataFrame(rows)
@@ -126,7 +130,8 @@ def _load_data_from_supabase() -> Optional[pd.DataFrame]:
             axis=1,
         )
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Supabase 数据抓取或解析异常: {str(e)}")
         return None
 
 

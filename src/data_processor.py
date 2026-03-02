@@ -4,12 +4,15 @@
 """
 
 import pandas as pd
+import streamlit as st
+import importlib
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
 # 数据文件路径
 DATA_DIR = Path(__file__).parent.parent / "data"
 DATA_FILE = DATA_DIR / "bestSelling_games.csv"
+SUPABASE_TABLE = "v_steam_games_v2"
 
 # 四象限分类颜色
 QUADRANT_COLORS = {
@@ -30,20 +33,27 @@ def load_data(min_reviews: int = 200) -> pd.DataFrame:
     Returns:
         清洗后的 DataFrame
     """
-    # 读取数据
-    df = pd.read_csv(DATA_FILE, encoding='latin-1')
+    df_supabase = _load_data_from_supabase()
+    if df_supabase is None:
+        # CSV fallback for local/dev scenarios
+        df = pd.read_csv(DATA_FILE, encoding='latin-1')
+        df = df.drop(columns=['Unnamed: 4', 'Unnamed: 5'], errors='ignore')
+        df = df.rename(columns={
+            'game_name': 'name',
+            'reviews_like_rate': 'positive_rate',
+            'all_reviews_number': 'reviews',
+            'user_defined_tags': 'tags_str'
+        })
+    else:
+        df = df_supabase
     
-    # 删除空列
-    df = df.drop(columns=['Unnamed: 4', 'Unnamed: 5'], errors='ignore')
-    
-    # 重命名列
-    df = df.rename(columns={
-        'game_name': 'name',
-        'reviews_like_rate': 'positive_rate',
-        'all_reviews_number': 'reviews',
-        'user_defined_tags': 'tags_str'
-    })
-    
+    # 标准化字段类型
+    df['reviews'] = pd.to_numeric(df['reviews'], errors='coerce').fillna(0).astype(int)
+    df['positive_rate'] = pd.to_numeric(df['positive_rate'], errors='coerce').fillna(0.0)
+    # Supabase 数据一般是 0-1，小于等于 1 时转百分比，和旧页面口径保持一致
+    if not df.empty and df['positive_rate'].max() <= 1.0:
+        df['positive_rate'] = df['positive_rate'] * 100
+
     # 筛选评论数
     df = df[df['reviews'] >= min_reviews].copy()
     
@@ -55,6 +65,69 @@ def load_data(min_reviews: int = 200) -> pd.DataFrame:
         df[f'tag_{i+1}'] = df['tags'].apply(lambda x: x[i] if i < len(x) else '')
     
     return df
+
+
+def _load_data_from_supabase() -> Optional[pd.DataFrame]:
+    """Load data from Supabase if secrets and dependency are available.
+
+    Returns None when Supabase is not configured or query fails.
+    """
+    try:
+        supabase_module = importlib.import_module("supabase")
+        create_client = getattr(supabase_module, "create_client")
+    except Exception:
+        return None
+
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except Exception:
+        return None
+
+    try:
+        client = create_client(url, key)
+        page_size = 1000
+        offset = 0
+        rows = []
+
+        while True:
+            resp = (
+                client.table(SUPABASE_TABLE)
+                .select("appid,game,review_count,positive_rate,tag1,tag2,tag3,tag4,tag5")
+                .limit(page_size)
+                .offset(offset)
+                .execute()
+            )
+            batch = resp.data or []
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows)
+        df = df.rename(columns={
+            'game': 'name',
+            'review_count': 'reviews',
+        })
+
+        for i in range(1, 6):
+            col = f'tag{i}'
+            if col not in df.columns:
+                df[col] = ''
+            df[col] = df[col].fillna('').astype(str)
+
+        df['tags_str'] = df.apply(
+            lambda r: ', '.join([r['tag1'], r['tag2'], r['tag3'], r['tag4'], r['tag5']]).strip(', ').strip(),
+            axis=1,
+        )
+        return df
+    except Exception:
+        return None
 
 
 def parse_tags(tags_str: str) -> List[str]:
@@ -98,9 +171,9 @@ def calculate_global_stats(df: pd.DataFrame) -> Dict[str, float]:
         包含平均好评率和平均评论数的字典
     """
     return {
-        'avg_positive_rate': df['positive_rate'].mean(),
-        'avg_reviews': df['reviews'].mean(),
-        'total_games': len(df),
+        'avg_positive_rate': float(df['positive_rate'].mean()),
+        'avg_reviews': float(df['reviews'].mean()),
+        'total_games': float(len(df)),
     }
 
 

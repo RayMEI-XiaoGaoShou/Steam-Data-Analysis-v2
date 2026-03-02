@@ -1,20 +1,28 @@
 import pandas as pd
+import sys
+from data_processor import load_data
 
-df = pd.read_csv(r'C:\Users\happyelements\Desktop\Steam 数据分析\data\bestSelling_games.csv', encoding='latin-1')
-# 删除空列
-df = df.drop(columns=['Unnamed: 4', 'Unnamed: 5'], errors='ignore')
+
+def safe_print(text: str) -> None:
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode(enc, errors='replace').decode(enc, errors='replace'))
+
+df = load_data(min_reviews=200)
 
 print('Columns:', df.columns.tolist())
 print('\nDtypes:')
 print(df.dtypes)
 print('\nFirst 5 rows:')
-print(df.head().to_string())
+safe_print(df.head().to_string())
 print('\nSample tags values:')
 for i in range(3):
-    tags_val = df.iloc[i]['user_defined_tags']
+    tags_val = df.iloc[i]['tags_str']
     if pd.notna(tags_val):
         print(f'Row {i}: {str(tags_val)[:200]}...')
     else:
         print(f'Row {i}: NaN')
 print('\nReviews stats:')
-print(df['all_reviews_number'].describe())
+print(df['reviews'].describe())

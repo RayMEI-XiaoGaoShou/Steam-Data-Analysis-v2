@@ -19,13 +19,19 @@ from data_processor import (
     get_games_by_tag,
     get_games_by_tags,
     calculate_quadrant_stats,
+    calculate_tag_lift,
+    calculate_tag_combo_synergy,
+    calculate_yearly_trends,
     QUADRANT_COLORS
 )
 from charts import (
     create_tag_overview_chart,
     create_single_tag_chart,
     create_multi_tags_chart,
-    create_quadrant_stats_html
+    create_quadrant_stats_html,
+    create_tag_lift_chart,
+    create_tag_synergy_chart,
+    create_time_trend_chart
 )
 
 # 页面配置
@@ -89,6 +95,23 @@ def get_cached_tag_stats(min_reviews: int):
     df = load_cached_data(min_reviews)
     return calculate_tag_stats(df)
 
+@st.cache_data
+def get_cached_tag_lift(min_reviews: int):
+    """缓存 Tag Lift 数据"""
+    df = load_cached_data(min_reviews)
+    return calculate_tag_lift(df)
+
+@st.cache_data
+def get_cached_tag_synergy(min_reviews: int, top_n_tags: int):
+    """缓存 Tag 组合增益数据"""
+    df = load_cached_data(min_reviews)
+    return calculate_tag_combo_synergy(df, top_n_tags=top_n_tags)
+
+@st.cache_data
+def get_cached_yearly_trends(min_reviews: int):
+    """缓存时间趋势数据"""
+    df = load_cached_data(min_reviews)
+    return calculate_yearly_trends(df)
 
 def main():
     # 标题
@@ -150,10 +173,13 @@ def main():
             """, unsafe_allow_html=True)
     
     # 主内容区 - 使用 Tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab_lift, tab_synergy, tab_trend, tab4 = st.tabs([
         "📈 综合分析", 
         "🔍 单 Tag 分析", 
         "🔗 多 Tags 分析",
+        "🚀 Tag 破圈度 (Lift)",
+        "✨ Tag 组合增益 (Synergy)",
+        "⏳ 时间趋势",
         "📋 数据表格"
     ])
     
@@ -387,6 +413,73 @@ def main():
                 else:
                     st.error(f"「{' + '.join(selected_multi_tags)}」组合只有 {len(multi_tag_games)} 款游戏，数据样本过小（需要至少3款）")
     
+    # ==================== Tab: Tag 破圈度 (Lift) ====================
+    with tab_lift:
+        st.subheader("🚀 Tag 破圈度 (Lift) 分析")
+        st.markdown("""
+        **什么是破圈度 (Lift)？**
+        Lift 指标衡量了一个 Tag 对游戏获得“高好评”的**提升倍数**。
+        - **Lift > 1**：说明带有该 Tag 的游戏，获得高好评的概率**高于**全局平均水平。数值越大，说明该 Tag 越是“好评密码”。
+        - **Lift = 1**：说明该 Tag 对好评率没有明显影响。
+        - **Lift < 1**：说明带有该 Tag 的游戏，获得高好评的概率**低于**全局平均水平，可能是“雷区”。
+
+        **如何使用此洞察？**
+        在立项或宣发时，优先考虑那些 Lift 显著大于 1 的核心玩法或题材 Tag，这通常意味着该品类的核心受众更容易给出好评，或者该品类的市场竞争环境相对友好。
+        """)
+        
+        lift_df = get_cached_tag_lift(min_reviews)
+        if not lift_df.empty:
+            top_n_lift = st.slider("显示 Top N 个 Tag", min_value=10, max_value=50, value=20, step=5, key="lift_slider")
+            fig_lift = create_tag_lift_chart(lift_df, top_n=top_n_lift)
+            st.plotly_chart(fig_lift, use_container_width=True)
+        else:
+            st.info("没有足够的 Lift 数据")
+
+    # ==================== Tab: Tag 组合增益 (Synergy) ====================
+    with tab_synergy:
+        st.subheader("✨ Tag 组合增益 (Synergy) 分析")
+        st.markdown("""
+        **什么是组合增益 (Synergy)？**
+        Synergy 衡量了两个 Tag 组合在一起时，是否产生了“1+1>2”的化学反应。
+        - **Synergy > 1 (正增益)**：说明这两个 Tag 组合在一起时，获得高好评的概率**超出了**它们各自单独存在时的预期。这通常代表着一种极具潜力的“缝合”或“跨界”创新。
+        - **Synergy < 1 (负增益)**：说明这两个 Tag 组合在一起时，效果反而不如预期，可能是受众群体冲突或玩法存在天然矛盾。
+
+        **如何使用此洞察？**
+        寻找那些 Synergy 显著大于 1 的 Tag 组合，可以为“微创新”提供数据支撑。例如，如果发现“卡牌构建”+“肉鸽”的 Synergy 极高，说明这种组合深受玩家喜爱，是值得尝试的研发方向。
+        """)
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            top_n_synergy = st.slider("分析前 N 个热门 Tag 的组合", min_value=20, max_value=100, value=50, step=10, key="synergy_slider")
+            chart_type = st.radio("图表类型", ["bubble", "heatmap"], key="synergy_chart_type")
+            
+        with col2:
+            synergy_df = get_cached_tag_synergy(min_reviews, top_n_synergy)
+            if not synergy_df.empty:
+                fig_synergy = create_tag_synergy_chart(synergy_df, chart_type=chart_type)
+                st.plotly_chart(fig_synergy, use_container_width=True)
+            else:
+                st.info("没有足够的组合增益数据")
+
+    # ==================== Tab: 时间趋势 ====================
+    with tab_trend:
+        st.subheader("⏳ 游戏发布时间趋势")
+        st.markdown("""
+        **什么是时间趋势？**
+        展示了历年发布游戏的**数量变化**与**平均好评率**的演变。
+
+        **如何使用此洞察？**
+        - **观察市场热度**：柱状图代表每年符合条件（评论数达标）的游戏数量，反映了 Steam 市场的整体繁荣度或竞争激烈程度。
+        - **评估质量趋势**：折线图代表当年的平均好评率。如果数量上升但好评率下降，可能意味着市场出现了“劣币驱逐良币”或玩家审美疲劳；如果两者双升，则说明市场处于健康的高速发展期。
+        """)
+        
+        trend_df = get_cached_yearly_trends(min_reviews)
+        if not trend_df.empty:
+            fig_trend = create_time_trend_chart(trend_df)
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("没有足够的时间趋势数据")
+
     # ==================== Tab 4: 数据表格 ====================
     with tab4:
         st.subheader("游戏数据明细")

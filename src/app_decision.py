@@ -144,6 +144,29 @@ def show_quadrant_explanation():
         </div>
         """, unsafe_allow_html=True)
 
+def render_intro_page():
+    st.header("🏠 平台介绍")
+    
+    st.markdown("""
+    ### 📊 数据引擎 (Data Engine)
+    - **基础数据**: 使用 Steam 官方 API 获取 AppID、发布日期、评论数、好评率等核心指标。
+    - **标签数据**: 使用 Store 页面爬虫精准获取游戏的 Tags 信息。
+    - 💡 **已将数据获取流程可复用化，可实现周期性更新。**
+    
+    ---
+    
+    ### 🧭 模块指南
+    
+    #### 🌟 机会发现
+    - **当前机会**: 宏观扫描市场，发现高口碑低供给的蓝海、高热度红海、高增益组合以及近期升温最快的品类。
+    - **底层数据分析**: 提供多维度的全局数据透视。通过综合分析、单/多 Tag 分析、破圈度 (Lift)、组合增益 (Synergy) 和时间趋势，深度挖掘 Tag 背后的市场价值和规律。
+    
+    #### 🎯 方向研究
+    - **单 Tag 画像**: 深入剖析单个 Tag 的市场表现、四象限分布、协同关系及代表作。
+    - **多 Tag 方向验证**: 验证 2-3 个核心 Tags 组合的市场潜力，从口碑、热度、协同增益等维度进行综合评分。
+    - **案例库/对标**: 搜索特定游戏，查看其核心数据，并寻找共享核心 Tag 的相似游戏进行对标分析。
+    """)
+
 def render_opportunity_discovery(df, min_reviews, tag_stats):
     st.header("💡 机会发现")
     synergy_df = get_cached_tag_synergy(min_reviews, 50)
@@ -905,11 +928,11 @@ def render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag
         st.subheader("⏳ 游戏发布时间趋势")
         st.markdown("""
         **什么是时间趋势？**
-        展示了历年发布游戏的**数量变化**与**好评率中位数**的演变。
+        展示了特定 Tag 下历年发布游戏的**数量变化**与**好评率中位数**的演变。
 
         **如何使用此洞察？**
-        - **观察市场热度**：柱状图代表每年符合条件（评论数达标）的游戏数量，反映了 Steam 市场的整体繁荣度或竞争激烈程度。
-        - **评估质量趋势**：折线图代表当年的好评率中位数。如果数量上升但好评率下降，可能意味着市场出现了“劣币驱逐良币”或玩家审美疲劳；如果两者双升，则说明市场处于健康的高速发展期。
+        - **观察品类热度**：柱状图代表该 Tag 下每年符合条件（评论数达标）的游戏数量，反映了该品类的市场繁荣度或竞争激烈程度。
+        - **评估品类质量趋势**：折线图代表该 Tag 当年的好评率中位数。如果数量上升但好评率下降，可能意味着该品类出现了“劣币驱逐良币”或玩家审美疲劳；如果两者双升，则说明该品类处于健康的高速发展期。
         """)
         
         trend_tag = st.selectbox("按 Tag 筛选", options=["全部"] + all_tags, index=0, key="trend_tag")
@@ -985,6 +1008,13 @@ def render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag
         st.caption(f"共 {len(display_df)} 款游戏")
 
 def main():
+    # 初始化 session_state
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "平台介绍"
+
+    def set_page(page_name):
+        st.session_state.current_page = page_name
+
     # 标题
     st.markdown('<div class="main-header">🎮 Steam 游戏数据分析</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-header">分析 Tags 与好评率、评论数之间的关联，面向预研/立项/投资筛选的 Tag 机会发现工具</div>', unsafe_allow_html=True)
@@ -992,20 +1022,18 @@ def main():
     # 侧边栏 - 全局设置
     with st.sidebar:
         st.header("🧭 导航")
-        nav = st.selectbox(
-            "导航",
-            [
-                "▶ 🌟 机会发现",
-                "　├ 当前机会",
-                "　└ 底层数据分析",
-                "▶ 🎯 方向研究",
-                "　├ 单 Tag 画像",
-                "　├ 多 Tag 方向验证",
-                "　├ 案例库/对标",
-                "　└ 底层数据分析 "
-            ],
-            label_visibility="collapsed"
-        )
+        
+        st.markdown("### 🏠 开始")
+        st.button("平台介绍", on_click=set_page, args=("平台介绍",), type="primary" if st.session_state.current_page == "平台介绍" else "secondary", use_container_width=True)
+        
+        st.markdown("### 🌟 机会发现")
+        st.button("当前机会", on_click=set_page, args=("当前机会",), type="primary" if st.session_state.current_page == "当前机会" else "secondary", use_container_width=True)
+        st.button("底层数据分析", on_click=set_page, args=("底层数据分析",), type="primary" if st.session_state.current_page == "底层数据分析" else "secondary", use_container_width=True)
+        
+        st.markdown("### 🎯 方向研究")
+        st.button("单 Tag 画像", on_click=set_page, args=("单 Tag 画像",), type="primary" if st.session_state.current_page == "单 Tag 画像" else "secondary", use_container_width=True)
+        st.button("多 Tag 方向验证", on_click=set_page, args=("多 Tag 方向验证",), type="primary" if st.session_state.current_page == "多 Tag 方向验证" else "secondary", use_container_width=True)
+        st.button("案例库/对标", on_click=set_page, args=("案例库/对标",), type="primary" if st.session_state.current_page == "案例库/对标" else "secondary", use_container_width=True)
         
         st.divider()
         st.header("⚙️ 设置")
@@ -1038,16 +1066,19 @@ def main():
     all_tags = get_all_tags(df)
     tag_stats = get_cached_tag_stats(min_reviews)
     
-    if nav in ["▶ 🌟 机会发现", "　├ 当前机会"]:
+    nav = st.session_state.current_page
+    
+    if nav == "平台介绍":
+        render_intro_page()
+    elif nav == "当前机会":
         render_opportunity_discovery(df, min_reviews, tag_stats)
-    elif nav == "　├ 多 Tag 方向验证":
+    elif nav == "多 Tag 方向验证":
         render_direction_validation(df, all_tags)
-    elif nav == "　├ 单 Tag 画像":
+    elif nav == "单 Tag 画像":
         render_tag_profile(df, min_reviews, all_tags, tag_stats)
-    elif nav == "　├ 案例库/对标":
+    elif nav == "案例库/对标":
         render_benchmark_library(df, all_tags)
-    elif nav in ["　└ 底层数据分析", "　└ 底层数据分析 ", "▶ 🎯 方向研究"]:
+    elif nav == "底层数据分析":
         render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag_stats)
-
 if __name__ == "__main__":
     main()

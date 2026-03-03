@@ -26,7 +26,8 @@ from data_processor import (
     calculate_tag_combo_synergy,
     calculate_yearly_trends,
     QUADRANT_COLORS,
-    calculate_combo_verdict
+    calculate_combo_verdict,
+    get_tag_synergy_profile
 )
 import plotly.express as px
 from charts import (
@@ -232,6 +233,15 @@ def render_direction_validation(df, all_tags):
         verdict_res = calculate_combo_verdict(df, selected_tags)
         
         st.subheader("验证结论")
+        with st.expander("ℹ️ 评分规则说明"):
+            st.markdown("""
+            **评分维度说明：**
+            - **口碑**: 基于组合内游戏的好评率中位数在全局的分位数。
+            - **热度**: 基于组合内游戏的评论数中位数在全局的分位数。
+            - **协同增益**: 衡量组合 Tags 共同出现时，好评率是否高于各自单独出现时的预期 (1+1>2)。
+            - **动量趋势**: 结合近期（近3年）发布数量的增长趋势与好评率变化。
+            - **置信度**: 基于该组合下的游戏样本量，样本越多置信度越高。
+            """)
         
         tier_evals = verdict_res.get('tier_evaluations', {})
         if not isinstance(tier_evals, dict):
@@ -250,11 +260,11 @@ def render_direction_validation(df, all_tags):
         }
         
         metrics = [
-            ('Quality (质量)', 'Q', '好评率分位数'), 
-            ('Heat (热度)', 'H', '评论数分位数'), 
-            ('Synergy (协同)', 'S', '组合增益'), 
-            ('Momentum (趋势)', 'M', '近期供需趋势'), 
-            ('Confidence (置信度)', 'C', '样本量')
+            ('口碑', 'Q', '好评率分位数'), 
+            ('热度', 'H', '评论数分位数'), 
+            ('协同增益', 'S', '组合增益'), 
+            ('动量趋势', 'M', '近期供需趋势'), 
+            ('置信度', 'C', '样本量')
         ]
         
         cols = st.columns(5)
@@ -288,13 +298,43 @@ def render_direction_validation(df, all_tags):
             if len(combo_df) >= 3:
                 global_avg_rate = df['positive_rate'].median()
                 global_avg_reviews = df['reviews'].median()
-                fig_scatter = create_multi_tags_chart(
-                    combo_df,
-                    selected_tags,
-                    float(global_avg_rate),
-                    float(global_avg_reviews)
-                )
-                st.plotly_chart(fig_scatter, use_container_width=True)
+                
+                col_plot, col_summary = st.columns([3, 1])
+                
+                with col_summary:
+                    st.markdown("**四象限分布**")
+                    with st.expander("📍 四象限说明"):
+                        show_quadrant_explanation()
+                        
+                    quad_stats = calculate_quadrant_stats(
+                        combo_df, 
+                        float(global_avg_rate), 
+                        float(global_avg_reviews)
+                    )
+                    
+                    for quadrant, data in quad_stats.items():
+                        color = QUADRANT_COLORS[quadrant]
+                        st.markdown(f"""
+                        <div style="
+                            background-color: {color}; 
+                            color: white; 
+                            padding: 10px 12px; 
+                            border-radius: 6px; 
+                            margin-bottom: 6px;
+                        ">
+                            <div style="font-weight: bold;">{quadrant}</div>
+                            <div>{data['count']} 个，占 {data['percentage']}%</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                with col_plot:
+                    fig_scatter = create_multi_tags_chart(
+                        combo_df,
+                        selected_tags,
+                        float(global_avg_rate),
+                        float(global_avg_reviews)
+                    )
+                    st.plotly_chart(fig_scatter, use_container_width=True)
             else:
                 st.info("数据样本过小 (少于3款游戏)，无法生成分布图")
                 
@@ -337,7 +377,14 @@ def render_tag_profile(df, min_reviews, all_tags, tag_stats):
             st.warning("没有找到该 Tag 的游戏")
             return
             
-        st.subheader("赛道体验卡")
+        st.subheader("概览")
+        with st.expander("ℹ️ 破圈度 (Lift) 说明"):
+            st.markdown("""
+            **破圈度 (Lift)** 衡量了一个 Tag 对游戏获得“高好评”的提升倍数。
+            - **Lift > 1**：说明带有该 Tag 的游戏，获得高好评的概率高于全局中位数水平。数值越大，说明该 Tag 越是“好评密码”。
+            - **Lift = 1**：说明该 Tag 对好评率没有明显影响。
+            - **Lift < 1**：说明带有该 Tag 的游戏，获得高好评的概率低于全局中位数水平，可能是“雷区”。
+            """)
         col1, col2, col3, col4, col5 = st.columns(5)
         
         # Get stats from tag_stats
@@ -364,6 +411,77 @@ def render_tag_profile(df, min_reviews, all_tags, tag_stats):
         col4.metric("高好评率占比", f"{high_rate_pct:.1f}%")
         col5.metric("破圈度 (Lift)", f"{lift:.2f}")
         
+        st.divider()
+        st.subheader("📊 Tag 分布地图")
+        
+        tag_avg_rate = tag_games['positive_rate'].mean()
+        tag_avg_reviews = tag_games['reviews'].mean()
+        
+        col_plot, col_summary = st.columns([3, 1])
+        
+        with col_summary:
+            st.markdown("**四象限分布**")
+            with st.expander("📍 四象限说明"):
+                show_quadrant_explanation()
+                
+            quad_stats = calculate_quadrant_stats(
+                tag_games, 
+                float(tag_avg_rate), 
+                float(tag_avg_reviews)
+            )
+            
+            for quadrant, data in quad_stats.items():
+                color = QUADRANT_COLORS[quadrant]
+                st.markdown(f"""
+                <div style="
+                    background-color: {color}; 
+                    color: white; 
+                    padding: 10px 12px; 
+                    border-radius: 6px; 
+                    margin-bottom: 6px;
+                ">
+                    <div style="font-weight: bold;">{quadrant}</div>
+                    <div>{data['count']} 个，占 {data['percentage']}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        with col_plot:
+            fig_scatter = create_single_tag_chart(
+                tag_games,
+                selected_tag,
+                float(tag_avg_rate),
+                float(tag_avg_reviews)
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+            
+        st.divider()
+        st.subheader("🔗 协同关系")
+        
+        synergy_profile = get_tag_synergy_profile(df, selected_tag)
+        
+        col_syn1, col_syn2, col_syn3 = st.columns(3)
+        
+        with col_syn1:
+            st.markdown("**✨ 最佳协同 (Synergy > 1)**")
+            if not synergy_profile['top_synergy_lift_tags'].empty:
+                st.dataframe(synergy_profile['top_synergy_lift_tags'][['tag', 'synergy_lift', 'co_occurrence_count']].rename(columns={'tag': '搭配 Tag', 'synergy_lift': '协同增益', 'co_occurrence_count': '共现次数'}), hide_index=True) # type: ignore
+            else:
+                st.info("无显著正向协同")
+                
+        with col_syn2:
+            st.markdown("**⚠️ 最差协同 (Synergy < 1)**")
+            if not synergy_profile['bottom_synergy_lift_tags'].empty:
+                st.dataframe(synergy_profile['bottom_synergy_lift_tags'][['tag', 'synergy_lift', 'co_occurrence_count']].rename(columns={'tag': '搭配 Tag', 'synergy_lift': '协同增益', 'co_occurrence_count': '共现次数'}), hide_index=True) # type: ignore
+            else:
+                st.info("无显著负向协同")
+                
+        with col_syn3:
+            st.markdown("**🤝 最常搭配**")
+            if not synergy_profile['top_co_occurring_tags'].empty:
+                st.dataframe(synergy_profile['top_co_occurring_tags'][['tag', 'co_occurrence_count']].rename(columns={'tag': '搭配 Tag', 'co_occurrence_count': '共现次数'}), hide_index=True) # type: ignore
+            else:
+                st.info("无搭配数据")
+
         st.divider()
         st.subheader("代表作与反例")
         c1, c2, c3, c4 = st.columns(4)
@@ -874,7 +992,20 @@ def main():
     # 侧边栏 - 全局设置
     with st.sidebar:
         st.header("🧭 导航")
-        nav = st.radio("导航", ["机会发现", "多Tag方向验证", "Tag画像(待开发)", "对标库(待开发)", "底层数据分析"], label_visibility="collapsed")
+        nav = st.selectbox(
+            "导航",
+            [
+                "▶ 🌟 机会发现",
+                "　├ 当前机会",
+                "　└ 底层数据分析",
+                "▶ 🎯 方向研究",
+                "　├ 单 Tag 画像",
+                "　├ 多 Tag 方向验证",
+                "　├ 案例库/对标",
+                "　└ 底层数据分析 "
+            ],
+            label_visibility="collapsed"
+        )
         
         st.divider()
         st.header("⚙️ 设置")
@@ -907,15 +1038,15 @@ def main():
     all_tags = get_all_tags(df)
     tag_stats = get_cached_tag_stats(min_reviews)
     
-    if nav == "机会发现":
+    if nav in ["▶ 🌟 机会发现", "　├ 当前机会"]:
         render_opportunity_discovery(df, min_reviews, tag_stats)
-    elif nav == "多Tag方向验证":
+    elif nav == "　├ 多 Tag 方向验证":
         render_direction_validation(df, all_tags)
-    elif nav == "Tag画像(待开发)":
+    elif nav == "　├ 单 Tag 画像":
         render_tag_profile(df, min_reviews, all_tags, tag_stats)
-    elif nav == "对标库(待开发)":
+    elif nav == "　├ 案例库/对标":
         render_benchmark_library(df, all_tags)
-    elif nav == "底层数据分析":
+    elif nav in ["　└ 底层数据分析", "　└ 底层数据分析 ", "▶ 🎯 方向研究"]:
         render_underlying_data_analysis(df, min_reviews, all_tags, global_stats, tag_stats)
 
 if __name__ == "__main__":

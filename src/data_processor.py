@@ -457,6 +457,125 @@ def calculate_tag_lift(
     ).reset_index(drop=True)
 
 
+def _get_tag_synergy_profile_from_df(
+    df: pd.DataFrame,
+    target_tag: str,
+    min_co_occurrence: int = 10,
+) -> Dict[str, pd.DataFrame]:
+    """
+    计算单个 Tag 的协同关系画像。
+
+    输出包含三块：
+        - `top_co_occurring_tags`: 与目标 Tag 共现次数最高的 3 个 Tag；
+        - `top_synergy_lift_tags`: 与目标 Tag 组合后 Synergy Lift 最高的 3 个 Tag；
+        - `bottom_synergy_lift_tags`: 与目标 Tag 组合后 Synergy Lift 最低的 3 个 Tag（稀释）。
+    """
+    co_occurrence_columns = ['tag', 'co_occurrence_count']
+    synergy_columns = [
+        'tag',
+        'co_occurrence_count',
+        'high_positive_count',
+        'p_high_positive_given_combo',
+        'synergy_lift',
+    ]
+    empty_result = {
+        'top_co_occurring_tags': pd.DataFrame(columns=co_occurrence_columns),
+        'top_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+        'bottom_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+    }
+
+    normalized_target_tag = str(target_tag).strip()
+    if df.empty or not normalized_target_tag or 'positive_rate' not in df.columns:
+        return empty_result
+
+    if 'tags' not in df.columns:
+        if 'tags_str' not in df.columns:
+            return empty_result
+        working_df = df[['positive_rate', 'tags_str']].copy()
+        working_df['tags'] = working_df['tags_str'].apply(parse_tags)
+    else:
+        working_df = df[['positive_rate', 'tags']].copy()
+
+    working_df['tags'] = working_df['tags'].apply(
+        lambda tags: tags if isinstance(tags, list) else parse_tags(tags)
+    )
+
+    threshold = float(working_df['positive_rate'].median())
+    high_positive_mask = _get_high_positive_mask(working_df, threshold)
+    target_mask = working_df['tags'].apply(lambda tags: normalized_target_tag in tags)
+    target_game_count = int(target_mask.astype(int).sum())
+    if target_game_count == 0:
+        return empty_result
+
+    target_high_positive_rate = float(high_positive_mask[target_mask].mean())
+    pair_records = []
+    for row_pos, tags in enumerate(working_df['tags']):
+        if not target_mask.iloc[row_pos]:
+            continue
+
+        unique_tags = {tag for tag in tags if tag and tag != normalized_target_tag}
+        if not unique_tags:
+            continue
+
+        is_high_positive = int(high_positive_mask.iloc[row_pos])
+        for tag in unique_tags:
+            pair_records.append((tag, is_high_positive))
+
+    if not pair_records:
+        return empty_result
+
+    pair_df = pd.DataFrame(pair_records, columns=['tag', 'is_high_positive'])
+    co_stats = pair_df.groupby('tag', as_index=False).agg(
+        co_occurrence_count=('is_high_positive', 'size'),
+        high_positive_count=('is_high_positive', 'sum'),
+    )
+    co_stats['high_positive_count'] = co_stats['high_positive_count'].astype(int)
+    co_stats['p_high_positive_given_combo'] = (
+        co_stats['high_positive_count'] / co_stats['co_occurrence_count']
+    )
+    if target_high_positive_rate > 0:
+        co_stats['synergy_lift'] = (
+            co_stats['p_high_positive_given_combo'] / target_high_positive_rate
+        )
+    else:
+        co_stats['synergy_lift'] = 0.0
+
+    top_co_occurring_tags = (
+        co_stats[co_occurrence_columns]
+        .sort_values(['co_occurrence_count', 'tag'], ascending=[False, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+
+    min_sample_size = max(1, int(min_co_occurrence))
+    synergy_candidates = co_stats[co_stats['co_occurrence_count'] >= min_sample_size].copy()
+    if synergy_candidates.empty:
+        return {
+            'top_co_occurring_tags': top_co_occurring_tags,
+            'top_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+            'bottom_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+        }
+
+    top_synergy_lift_tags = (
+        synergy_candidates[synergy_columns]
+        .sort_values(['synergy_lift', 'co_occurrence_count', 'tag'], ascending=[False, False, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+    bottom_synergy_lift_tags = (
+        synergy_candidates[synergy_columns]
+        .sort_values(['synergy_lift', 'co_occurrence_count', 'tag'], ascending=[True, False, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+
+    return {
+        'top_co_occurring_tags': top_co_occurring_tags,
+        'top_synergy_lift_tags': top_synergy_lift_tags,
+        'bottom_synergy_lift_tags': bottom_synergy_lift_tags,
+    }
+
+
 def calculate_tag_combo_synergy(
     df: pd.DataFrame,
     min_combo_games: int = 5,
@@ -652,6 +771,128 @@ def get_games_by_tags(df: pd.DataFrame, tags: List[str]) -> pd.DataFrame:
     mask = df['tags'].apply(lambda x: all(tag in x for tag in tags))
     return df[mask].copy()
 
+
+def _get_tag_synergy_profile_from_combo_df(
+    synergy_df: pd.DataFrame,
+    target_tag: str,
+    min_co_occurrence: int = 10,
+) -> Dict[str, pd.DataFrame]:
+    """从组合协同结果表中提取单个 Tag 画像（兼容旧调用）。"""
+    co_occurrence_columns = ['tag', 'co_occurrence_count']
+    synergy_columns = [
+        'tag',
+        'co_occurrence_count',
+        'high_positive_count',
+        'p_high_positive_given_combo',
+        'synergy_lift',
+    ]
+    empty_result = {
+        'top_co_occurring_tags': pd.DataFrame(columns=co_occurrence_columns),
+        'top_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+        'bottom_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+    }
+
+    normalized_target_tag = str(target_tag).strip()
+    required_columns = {'tag1', 'tag2', 'game_count'}
+    if synergy_df.empty or not normalized_target_tag or not required_columns.issubset(synergy_df.columns):
+        return empty_result
+
+    mask = (synergy_df['tag1'] == normalized_target_tag) | (synergy_df['tag2'] == normalized_target_tag)
+    target_pairs = synergy_df[mask].copy()
+    if target_pairs.empty:
+        return empty_result
+
+    target_pairs['tag'] = target_pairs.apply(
+        lambda row: row['tag2'] if row['tag1'] == normalized_target_tag else row['tag1'],
+        axis=1,
+    )
+    target_pairs['co_occurrence_count'] = pd.to_numeric(target_pairs['game_count'], errors='coerce').fillna(0).astype(int)
+    target_pairs['high_positive_count'] = pd.to_numeric(
+        target_pairs.get('high_positive_count', 0),
+        errors='coerce',
+    ).fillna(0).astype(int)
+    target_pairs['p_high_positive_given_combo'] = pd.to_numeric(
+        target_pairs.get('p_high_positive_given_combo', 0.0),
+        errors='coerce',
+    ).fillna(0.0)
+    if 'pair_lift' in target_pairs.columns:
+        target_pairs['synergy_lift'] = pd.to_numeric(target_pairs['pair_lift'], errors='coerce').fillna(0.0)
+    elif 'synergy_score' in target_pairs.columns:
+        target_pairs['synergy_lift'] = pd.to_numeric(target_pairs['synergy_score'], errors='coerce').fillna(0.0)
+    else:
+        target_pairs['synergy_lift'] = 0.0
+
+    profile_stats = target_pairs[synergy_columns].groupby('tag', as_index=False).agg(
+        co_occurrence_count=('co_occurrence_count', 'max'),
+        high_positive_count=('high_positive_count', 'max'),
+        p_high_positive_given_combo=('p_high_positive_given_combo', 'max'),
+        synergy_lift=('synergy_lift', 'max'),
+    )
+    if profile_stats.empty:
+        return empty_result
+
+    top_co_occurring_tags = (
+        profile_stats[co_occurrence_columns]
+        .sort_values(['co_occurrence_count', 'tag'], ascending=[False, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+
+    min_sample_size = max(1, int(min_co_occurrence))
+    synergy_candidates = profile_stats[profile_stats['co_occurrence_count'] >= min_sample_size].copy()
+    if synergy_candidates.empty:
+        return {
+            'top_co_occurring_tags': top_co_occurring_tags,
+            'top_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+            'bottom_synergy_lift_tags': pd.DataFrame(columns=synergy_columns),
+        }
+
+    top_synergy_lift_tags = (
+        synergy_candidates[synergy_columns]
+        .sort_values(['synergy_lift', 'co_occurrence_count', 'tag'], ascending=[False, False, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+    bottom_synergy_lift_tags = (
+        synergy_candidates[synergy_columns]
+        .sort_values(['synergy_lift', 'co_occurrence_count', 'tag'], ascending=[True, False, True])
+        .head(3)
+        .reset_index(drop=True)
+    )
+
+    return {
+        'top_co_occurring_tags': top_co_occurring_tags,
+        'top_synergy_lift_tags': top_synergy_lift_tags,
+        'bottom_synergy_lift_tags': bottom_synergy_lift_tags,
+    }
+
+
+def get_tag_synergy_profile(
+    df: pd.DataFrame,
+    target_tag: str,
+    min_co_occurrence: int = 10,
+) -> Dict[str, pd.DataFrame]:
+    """
+    获取单个 Tag 的协同关系画像（协同关系模块专用）。
+
+    返回字典包含 3 个 DataFrame：
+        - `top_co_occurring_tags`: 共现次数最高的 3 个 Tag（含共现次数）；
+        - `top_synergy_lift_tags`: Synergy Lift 最高的 3 个 Tag；
+        - `bottom_synergy_lift_tags`: Synergy Lift 最低的 3 个 Tag（稀释）。
+    """
+    has_raw_tag_columns = 'positive_rate' in df.columns and ('tags' in df.columns or 'tags_str' in df.columns)
+    if has_raw_tag_columns:
+        return _get_tag_synergy_profile_from_df(
+            df,
+            target_tag,
+            min_co_occurrence=min_co_occurrence,
+        )
+
+    return _get_tag_synergy_profile_from_combo_df(
+        df,
+        target_tag,
+        min_co_occurrence=min_co_occurrence,
+    )
 
 def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str, object]:
     """

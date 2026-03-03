@@ -147,31 +147,81 @@ def render_opportunity_discovery(df, min_reviews, tag_stats):
     st.header("💡 机会发现")
     synergy_df = get_cached_tag_synergy(min_reviews, 50)
     
+    def render_top_list(title, data, name_col, val1_col, val2_col, val1_format, val2_format, color="#4CAF50"):
+        st.subheader(title)
+        for i, (_, row) in enumerate(data.iterrows()):
+            st.markdown(f"""
+            <div style="padding: 10px; border-radius: 8px; background-color: rgba(128, 128, 128, 0.05); margin-bottom: 8px; border-left: 4px solid {color};">
+                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 4px;">
+                    #{i+1} {row[name_col]}
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.95rem; opacity: 0.8;">
+                    <span>{val1_format.format(row[val1_col])}</span>
+                    <span style="font-weight: 600;">{val2_format.format(row[val2_col])}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.subheader("高口碑蓝海 (高好评低供给)")
-        blue_ocean = tag_stats[(tag_stats['game_count'] > 5) & (tag_stats['game_count'] < tag_stats['game_count'].median())].sort_values('avg_positive_rate', ascending=False).head(3)
-        for _, row in blue_ocean.iterrows():
-            st.metric(row['tag'], f"{row['avg_positive_rate']:.1f}% 好评", f"{row['game_count']} 款游戏")
+        blue_ocean = tag_stats[(tag_stats['game_count'] > 5) & (tag_stats['game_count'] < tag_stats['game_count'].median())].sort_values('avg_positive_rate', ascending=False).head(10)
+        render_top_list("高口碑低供给 Top 10", blue_ocean, 'tag', 'avg_positive_rate', 'game_count', "{:.1f}% 好评", "{} 款游戏", "#2196F3")
             
     with col2:
-        st.subheader("高热度红海 (高好评高热度)")
-        red_ocean = tag_stats[tag_stats['game_count'] >= tag_stats['game_count'].median()].sort_values(['avg_reviews', 'avg_positive_rate'], ascending=[False, False]).head(3)
-        for _, row in red_ocean.iterrows():
-            st.metric(row['tag'], f"{row['avg_reviews']:,.0f} 评论", f"{row['avg_positive_rate']:.1f}% 好评")
+        red_ocean = tag_stats[tag_stats['game_count'] >= tag_stats['game_count'].median()].sort_values(['avg_reviews', 'avg_positive_rate'], ascending=[False, False]).head(10)
+        render_top_list("高口碑高热度 Top 10", red_ocean, 'tag', 'avg_reviews', 'avg_positive_rate', "{:,.0f} 评论", "{:.1f}% 好评", "#F44336")
             
     with col3:
-        st.subheader("高增益组合 (1+1>2)")
         if not synergy_df.empty:
-            top_synergy = synergy_df.sort_values('synergy_score', ascending=False).head(3)
-            for _, row in top_synergy.iterrows():
-                st.metric(str(row['tag_pair']), f"Synergy: {row['synergy_score']:.2f}", f"Lift: {row['pair_lift']:.2f}")
+            top_synergy = synergy_df.sort_values('synergy_score', ascending=False).head(10)
+            render_top_list("高增益组合 Top 10", top_synergy, 'tag_pair', 'synergy_score', 'pair_lift', "Synergy: {:.2f}", "Lift: {:.2f}", "#9C27B0")
+        else:
+            st.subheader("高增益组合 Top 10")
+            st.info("数据不足")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col4, col5 = st.columns(2)
+    
+    with col4:
+        fast_growing = pd.DataFrame()
+        if 'release_year' in df.columns:
+            current_year = df['release_year'].max()
+            if pd.notna(current_year):
+                exploded = df[['release_year', 'tags']].explode('tags')
+                exploded = exploded[exploded['tags'].notna() & (exploded['tags'] != '')]
+                
+                recent_mask = exploded['release_year'] >= (current_year - 2)
+                past_mask = (exploded['release_year'] >= (current_year - 5)) & (exploded['release_year'] < (current_year - 2))
+                
+                recent_counts = exploded[recent_mask].groupby('tags').size()
+                past_counts = exploded[past_mask].groupby('tags').size()
+                
+                growth_df = pd.DataFrame({
+                    'recent_count': recent_counts,
+                    'past_count': past_counts
+                }).fillna(0)
+                
+                growth_df['growth'] = growth_df['recent_count'] - growth_df['past_count']
+                growth_df = growth_df[growth_df['recent_count'] >= 5]
+                
+                fast_growing = growth_df.sort_values('growth', ascending=False).head(10).reset_index() # type: ignore
+                fast_growing = fast_growing.rename(columns={'tags': 'tag'})
+        
+        if not fast_growing.empty:
+            render_top_list("近3-5年升温最快 Top 10", fast_growing, 'tag', 'past_count', 'recent_count', "过去: {:.0f} 款", "近3年: {:.0f} 款", "#FF9800")
+        else:
+            st.subheader("近3-5年升温最快 Top 10")
+            st.info("时间数据不足")
+            
+    with col5:
+        warning_tags = tag_stats[tag_stats['game_count'] >= tag_stats['game_count'].median()].sort_values(['avg_reviews', 'avg_positive_rate'], ascending=[False, True]).head(10)
+        render_top_list("高热低口碑预警 Top 10", warning_tags, 'tag', 'avg_reviews', 'avg_positive_rate', "{:,.0f} 评论", "{:.1f}% 好评", "#607D8B")
                 
     st.divider()
     st.subheader("🗺️ 机会地图 (Supply vs Quality)")
     fig = px.scatter(tag_stats, x='game_count', y='avg_positive_rate', size='avg_reviews', hover_name='tag', 
                      labels={'game_count': '供给量 (游戏数)', 'avg_positive_rate': '质量 (好评率中位数)', 'avg_reviews': '热度 (评论数中位数)'},
-                     title="Tag 机会分布")
+                     title="Tag 机会分布", log_x=True, opacity=0.6)
     st.plotly_chart(fig, use_container_width=True)
 
 def render_direction_validation(df, all_tags):
@@ -181,20 +231,83 @@ def render_direction_validation(df, all_tags):
     if len(selected_tags) >= 2:
         verdict_res = calculate_combo_verdict(df, selected_tags)
         
-        st.subheader(f"验证结论: {verdict_res['verdict']}")
+        st.subheader("验证结论")
         
-        scores = verdict_res['scores']
+        tier_evals = verdict_res.get('tier_evaluations', {})
+        if not isinstance(tier_evals, dict):
+            tier_evals = {}
+        scores = verdict_res.get('scores', {})
         if not isinstance(scores, dict):
             scores = {}
+        
+        # Define colors for tiers
+        tier_colors = {
+            "出色": "#4CAF50", # Green
+            "较好": "#8BC34A", # Light Green
+            "一般": "#FFC107", # Yellow
+            "较差": "#FF9800", # Orange
+            "差": "#F44336"    # Red
+        }
+        
+        metrics = [
+            ('Quality (质量)', 'Q', '好评率分位数'), 
+            ('Heat (热度)', 'H', '评论数分位数'), 
+            ('Synergy (协同)', 'S', '组合增益'), 
+            ('Momentum (趋势)', 'M', '近期供需趋势'), 
+            ('Confidence (置信度)', 'C', '样本量')
+        ]
+        
         cols = st.columns(5)
-        metrics = [('Quality', 'Q'), ('Heat', 'H'), ('Synergy', 'S'), ('Momentum', 'M'), ('Confidence', 'C')]
-        for col, (name, key) in zip(cols, metrics):
-            col.metric(name, str(scores[key]))
+        for col, (name, key, desc) in zip(cols, metrics):
+            tier = tier_evals.get(key, "差")
+            score = scores.get(key, 0)
+            color = tier_colors.get(tier, "#9E9E9E")
+            
+            col.markdown(f"""
+            <div style="
+                background-color: {color}; 
+                color: white; 
+                padding: 15px; 
+                border-radius: 10px; 
+                text-align: center;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                margin-bottom: 10px;
+            ">
+                <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 5px;">{name}</div>
+                <div style="font-size: 1.8rem; font-weight: 900; margin-bottom: 5px;">{tier}</div>
+                <div style="font-size: 0.9rem; opacity: 0.9;">得分: {score}</div>
+                <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 5px;">{desc}</div>
+            </div>
+            """, unsafe_allow_html=True)
             
         st.divider()
-        st.subheader("相关游戏表现")
+        
         combo_df = get_games_by_tags(df, selected_tags)
         if not combo_df.empty:
+            st.subheader("📊 组合分布地图")
+            if len(combo_df) >= 3:
+                global_avg_rate = df['positive_rate'].median()
+                global_avg_reviews = df['reviews'].median()
+                fig_scatter = create_multi_tags_chart(
+                    combo_df,
+                    selected_tags,
+                    float(global_avg_rate),
+                    float(global_avg_reviews)
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.info("数据样本过小 (少于3款游戏)，无法生成分布图")
+                
+            st.subheader("📈 时间趋势")
+            trend_df = calculate_yearly_trends(combo_df)
+            if not trend_df.empty and len(trend_df) >= 2:
+                fig_trend = create_time_trend_chart(trend_df)
+                st.plotly_chart(fig_trend, use_container_width=True)
+            else:
+                st.info("没有足够的时间趋势数据")
+                
+            st.divider()
+            st.subheader("相关游戏表现")
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.markdown("**🏆 Top 5 成功案例 (按评论数)**")

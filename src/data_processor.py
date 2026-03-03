@@ -655,7 +655,7 @@ def get_games_by_tags(df: pd.DataFrame, tags: List[str]) -> pd.DataFrame:
 
 def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str, object]:
     """
-    计算 Tag 组合的 Verdict V1 评分。
+    计算 Tag 组合的 5 档分项评估。
 
     评分维度：
         - Q (Quality): 组合中位数好评率在同阶组合中的百分位；
@@ -669,7 +669,7 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
         combo_tags: 目标组合的 Tag 列表。
 
     Returns:
-        Dict，包含分项分数、子结论和最终 Verdict。
+        Dict，包含分项分数与五维 `tier_evaluations`（Q/H/S/M/C）。
     """
     normalized_tags: List[str] = []
     for tag in combo_tags or []:
@@ -677,12 +677,85 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
         if cleaned_tag and cleaned_tag not in normalized_tags:
             normalized_tags.append(cleaned_tag)
 
-    def _score_to_level(score: float) -> str:
-        if score >= 70:
-            return "High"
-        if score >= 40:
-            return "Med"
-        return "Low"
+    def _percentile_to_tier(percentile_value: float) -> str:
+        if pd.isna(percentile_value):
+            return "差"
+
+        value = float(percentile_value)
+        if value >= 90:
+            return "出色"
+        if value >= 70:
+            return "较好"
+        if value >= 40:
+            return "一般"
+        if value >= 15:
+            return "较差"
+        return "差"
+
+    def _synergy_to_tier(lift_value: float) -> str:
+        if pd.isna(lift_value):
+            return "差"
+
+        value = float(lift_value)
+        if value > 1.25:
+            return "出色"
+        if value >= 1.05:
+            return "较好"
+        if value >= 0.95:
+            return "一般"
+        if value >= 0.8:
+            return "较差"
+        return "差"
+
+    def _confidence_to_tier(sample_size: int) -> str:
+        if sample_size >= 200:
+            return "出色"
+        if sample_size >= 80:
+            return "较好"
+        if sample_size >= 30:
+            return "一般"
+        if sample_size >= 10:
+            return "较差"
+        return "差"
+
+    def _momentum_to_tier(supply_growth: float, quality_delta: float) -> str:
+        if supply_growth > 0.10:
+            supply_trend = "up"
+        elif supply_growth < -0.10:
+            supply_trend = "down"
+        else:
+            supply_trend = "flat"
+
+        if quality_delta > 1.0:
+            quality_trend = "up"
+        elif quality_delta < -1.0:
+            quality_trend = "down"
+        else:
+            quality_trend = "flat"
+
+        if supply_trend == "up" and quality_trend == "up":
+            return "出色"
+        if (
+            (supply_trend == "flat" and quality_trend == "up")
+            or (supply_trend == "up" and quality_trend == "flat")
+        ):
+            return "较好"
+        if (
+            (supply_trend == "down" and quality_trend == "up")
+            or (supply_trend == "flat" and quality_trend == "flat")
+        ):
+            return "一般"
+        if (
+            (supply_trend == "up" and quality_trend == "down")
+            or (supply_trend == "flat" and quality_trend == "down")
+            or (supply_trend == "down" and quality_trend == "flat")
+        ):
+            return "较差"
+        return "差"
+
+    def _format_tier_summary(tier_evaluations: Dict[str, str]) -> str:
+        ordered_keys = ['Q', 'H', 'S', 'M', 'C']
+        return ' / '.join([f"{key}:{tier_evaluations.get(key, '差')}" for key in ordered_keys])
 
     def _lift_to_score(lift_value: float) -> float:
         if pd.isna(lift_value):
@@ -698,17 +771,6 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
             return 40.0
         return 10.0
 
-    def _verdict_from_score(total_score: float, sample_size: int) -> str:
-        if sample_size < 5:
-            return "样本不足，暂不建议投入"
-        if total_score >= 75:
-            return "值得继续深挖"
-        if total_score >= 60:
-            return "值得重点观察"
-        if total_score >= 45:
-            return "可以小步试水"
-        return "暂不建议投入"
-
     def _build_empty_result(reason: str) -> Dict[str, object]:
         score_dict = {
             'Q': 0.0,
@@ -718,14 +780,20 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
             'C': 10.0,
         }
         score_dict['total'] = 0.0
+        tier_evaluations = {
+            'Q': _percentile_to_tier(score_dict['Q']),
+            'H': _percentile_to_tier(score_dict['H']),
+            'S': _synergy_to_tier(0.0),
+            'M': "差",
+            'C': _confidence_to_tier(0),
+        }
         return {
             'combo_tags': normalized_tags,
             'combo_key': ' + '.join(normalized_tags),
             'sample_size': 0,
             'scores': score_dict,
-            'sub_verdicts': {k: _score_to_level(v) for k, v in score_dict.items() if k != 'total'},
-            'verdict': "样本不足，暂不建议投入",
-            'final_verdict': "样本不足，暂不建议投入",
+            'tier_evaluations': tier_evaluations,
+            'verdict': _format_tier_summary(tier_evaluations),
             'details': {
                 'reason': reason,
                 'quality_percentile': 0.0,
@@ -735,6 +803,8 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
                 'momentum_years': [],
                 'supply_score': 0.0,
                 'quality_score': 0.0,
+                'supply_growth': 0.0,
+                'quality_delta': 0.0,
             },
         }
 
@@ -893,6 +963,8 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
         momentum_score = 0.5 * supply_score + 0.5 * quality_trend_score
     else:
         momentum_years = []
+        supply_growth = 0.0
+        quality_delta = 0.0
         supply_score = 50.0
         quality_trend_score = 50.0
         momentum_score = 50.0
@@ -915,12 +987,12 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
     )
     scores['total'] = round(float(total_score), 2)
 
-    sub_verdicts = {
-        'Q': _score_to_level(scores['Q']),
-        'H': _score_to_level(scores['H']),
-        'S': _score_to_level(scores['S']),
-        'M': _score_to_level(scores['M']),
-        'C': _score_to_level(scores['C']),
+    tier_evaluations = {
+        'Q': _percentile_to_tier(scores['Q']),
+        'H': _percentile_to_tier(scores['H']),
+        'S': _synergy_to_tier(lift_vs_max_sub_combo),
+        'M': _momentum_to_tier(supply_growth, quality_delta),
+        'C': _confidence_to_tier(sample_size),
     }
 
     if sample_size > 0 and target_combo_key in set(all_combo_stats['combo_key']):
@@ -935,16 +1007,13 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
         combo_rank = 0
         total_combos = int(len(all_combo_stats))
 
-    final_verdict = _verdict_from_score(scores['total'], sample_size)
-
     return {
         'combo_tags': normalized_tags,
         'combo_key': ' + '.join(normalized_tags),
         'sample_size': sample_size,
         'scores': scores,
-        'sub_verdicts': sub_verdicts,
-        'verdict': final_verdict,
-        'final_verdict': final_verdict,
+        'tier_evaluations': tier_evaluations,
+        'verdict': _format_tier_summary(tier_evaluations),
         'details': {
             'quality_percentile': scores['Q'],
             'heat_percentile': scores['H'],
@@ -956,6 +1025,8 @@ def calculate_combo_verdict(df: pd.DataFrame, combo_tags: List[str]) -> Dict[str
             'momentum_years': momentum_years,
             'supply_score': round(float(supply_score), 2),
             'quality_score': round(float(quality_trend_score), 2),
+            'supply_growth': round(float(supply_growth), 4),
+            'quality_delta': round(float(quality_delta), 4),
             'combo_rank': combo_rank,
             'total_combos': total_combos,
         },

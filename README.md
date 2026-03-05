@@ -18,7 +18,7 @@
 ## 2. 数据工程架构：如何搞定 ~16.5 万款游戏的数据底座？
 我们设计了一套高可用的**混合式自动化数据抓取与入库流水线**，成功对 Steam 全库约 16.5 万个 AppID 进行了全量摸排，并最终筛选出约 1.9 万款具有统计价值的有效商业游戏（评论数 > 200）。
 
-### 🛠️ 混合获取方案 （详见：https://github.com/RayMEI-XiaoGaoShou/Steam-Data-Analysis-v2/tree/main/scraper_pipeline_template）
+### 🛠️ 混合获取方案
 *   **基础数据 (API 高速拉取)**：采用官方 `appreviews` 接口，无头静默拉取每个游戏的总评论数（Review Count）与好评率（Positive Rate）。
 *   **深层数据 (Store 页面爬虫)**：由于官方 API 不返回玩家自定义 Tag，我们针对通过初筛（热度达标）的游戏，直接向 Steam 商店 HTML 页面发起请求，通过 CSS Selector 精准刮取发行日期与前 5 个核心 Tag。
 
